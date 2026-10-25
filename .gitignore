@@ -1,22 +1,42 @@
-node_modules
-dist
-dist-ssr
-dev-dist
+# Dependencies
+node_modules/
+pnpm-store/
+
+# Production build
+dist/
+dist-ssr/
+dev-dist/
+
+# TypeScript
 *.tsbuildinfo
-.tooling
+
+# Tooling / IDE
+.tooling/
+.vscode/
+.idea/
 
 # Firebase emulator artefacts
-.firebase
+.firebase/
 firebase-debug.log
 firestore-debug.log
 ui-debug.log
 pubsub-debug.log
 *.log
 
-# local env
+# Local environment
 .env
 .env.local
 .env.*.local
 
+# OS
 .DS_Store
 *.local
+
+# Vite PWA
+pwa-assets.json
+
+# Capital One API Key (if/when added)
+# OPENAI_API_KEY=
+
+# Emulator UI
+ui/
