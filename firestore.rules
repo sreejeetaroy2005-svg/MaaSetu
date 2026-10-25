@@ -1,0 +1,22 @@
+rules_version = '2';
+
+//
+// MaaSetu — prototype rules (step 2: journey card).
+//
+// ⚠️ TEMPORARY, SYNTHETIC DATA ONLY ⚠️
+//
+// There is no sign-in yet: the app still uses the demo role switch, so the
+// client cannot be authenticated or authorised by role. These rules therefore
+// allow read/write so the journey-card screens can work against the Local
+// Emulator Suite.
+//
+// Replace this with role-aware rules when phone-OTP auth lands, and never
+// deploy it to a project that holds anything but synthetic data.
+//
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

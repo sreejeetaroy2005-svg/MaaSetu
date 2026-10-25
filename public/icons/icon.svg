@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="MaaSetu">
+  <!-- "Setu" = bridge: care crossing from one village to the next. -->
+  <rect width="512" height="512" rx="96" fill="#0f766e" />
+  <g fill="none" stroke="#ffffff" stroke-width="43" stroke-linecap="butt">
+    <path d="M82 307 A174 154 0 0 1 430 307" />
+  </g>
+  <g fill="#ffffff">
+    <rect x="61" y="291" width="390" height="33" />
+    <rect x="102" y="307" width="36" height="143" />
+    <rect x="374" y="307" width="36" height="143" />
+  </g>
+</svg>
