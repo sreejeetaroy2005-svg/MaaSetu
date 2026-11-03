@@ -1,20 +1,17 @@
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+import { EntryShell } from '../components/EntryShell';
+import { buttonClass } from '../components/ui';
 
 export default function NotFound() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
 
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-[30rem] flex-col items-center justify-center px-4 text-center">
-      <h1 className="text-2xl font-bold text-slate-900">{t('notFound.heading')}</h1>
-      <button
-        type="button"
-        onClick={() => void navigate('/')}
-        className="mt-4 min-h-14 rounded-2xl border-2 border-brand-700 bg-white px-6 text-base font-semibold text-brand-700"
-      >
+    <EntryShell title={t('notFound.heading')}>
+      <p className="text-base leading-relaxed text-slate-700">{t('notFound.body')}</p>
+      <Link to="/" className={buttonClass('primary', 'mt-4 w-full')}>
         {t('notFound.back')}
-      </button>
-    </div>
+      </Link>
+    </EntryShell>
   );
 }

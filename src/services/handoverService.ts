@@ -19,10 +19,12 @@ import {
 } from '../data/model';
 import { createDoc, newAudit, nowIso, updateDoc, type Actor } from './audit';
 import { db, firestoreStore } from './firebase';
-
 function newId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID()}`;
 }
+
+/** Config: handover overdue timeout in hours */
+const OVERDUE_HOURS = 48;
 
 /* ------------------------------------------------------------------ reads */
 
@@ -38,6 +40,58 @@ export async function listConsentLogs(motherId: string): Promise<ConsentLogEntry
   return snap.docs
     .map((d) => d.data() as ConsentLogEntry)
     .sort((a, b) => (a.grantedAt ?? '').localeCompare(b.grantedAt ?? ''));
+}
+
+/** Check for overdue handovers and create notifications */
+export async function checkOverdueHandovers() {
+  const now = new Date();
+  const handovers = await listAllHandovers();
+  const notificationsRef = collection(db, COLLECTIONS.notifications);
+  const existingNotifs = await getDocs(query(notificationsRef, where('type', '==', 'handover_overdue')));
+  const existingOverdueIds = new Set(existingNotifs.docs.map((d) => d.id));
+
+  handovers.forEach(async (handover) => {
+    if (handover.status !== 'pending') return;
+
+    const createdAt = new Date(handover.createdAt);
+    const diffHours = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60);
+
+    if (diffHours > OVERDUE_HOURS) {
+      const motherId = handover.motherId;
+      const fromWorkerId = handover.fromWorkerId;
+      const toWorkerId = handover.toWorkerId;
+      const handoverId = handover.id;
+
+      // Avoid duplicate overdue notifications
+      const fromNotifId = `overdue_from_${handoverId}`;
+      const toNotifId = `overdue_to_${handoverId}`;
+
+      if (!existingOverdueIds.has(fromNotifId)) {
+        await createDoc(firestoreStore, COLLECTIONS.notifications, {
+          id: fromNotifId,
+          recipientUserId: fromWorkerId,
+          type: 'handover_overdue',
+          motherId,
+          handoverId,
+          readAt: null,
+          synthetic: SYNTHETIC_FLAG,
+          audit: { createdBy: 'system', createdByRole: 'system' as const, createdAt: nowIso(), updatedBy: 'system', updatedByRole: 'system' as const, updatedAt: nowIso() },
+        });
+      }
+      if (!existingOverdueIds.has(toNotifId)) {
+        await createDoc(firestoreStore, COLLECTIONS.notifications, {
+          id: toNotifId,
+          recipientUserId: toWorkerId,
+          type: 'handover_overdue',
+          motherId,
+          handoverId,
+          readAt: null,
+          synthetic: SYNTHETIC_FLAG,
+          audit: { createdBy: 'system', createdByRole: 'system' as const, createdAt: nowIso(), updatedBy: 'system', updatedByRole: 'system' as const, updatedAt: nowIso() },
+        });
+      }
+    }
+  });
 }
 
 /* ----------------------------------------------------------------- writes */
@@ -108,6 +162,28 @@ export async function startHandover(
 
   await createDoc(firestoreStore, COLLECTIONS.consentLog, consent);
   await createDoc(firestoreStore, COLLECTIONS.handovers, handover);
+  // Notify the receiving worker
+  await createDoc(firestoreStore, COLLECTIONS.notifications, {
+    id: 'not_' + handover.id,
+    recipientUserId: input.toWorkerId,
+    type: 'handover_requested',
+    motherId: input.mother.id,
+    handoverId: handover.id,
+    readAt: null,
+    synthetic: SYNTHETIC_FLAG,
+    audit: newAudit(actor, at),
+  });
+  // Also notify the original ASHA that consent was recorded
+  await createDoc(firestoreStore, COLLECTIONS.notifications, {
+    id: 'not2_' + handover.id,
+    recipientUserId: input.fromWorker.id,
+    type: 'consent_recorded',
+    motherId: input.mother.id,
+    handoverId: handover.id,
+    readAt: null,
+    synthetic: SYNTHETIC_FLAG,
+    audit: newAudit(actor, at),
+  });
   await updateDoc(
     firestoreStore,
     COLLECTIONS.mothers,
@@ -137,13 +213,27 @@ export async function acceptHandover(
     throw new Error('Only a worker in the receiving village can accept this handover');
   }
 
-  return updateDoc(
+  // Update the handover status
+  const updated = await updateDoc(
     firestoreStore,
     COLLECTIONS.handovers,
     handover,
     { status: 'accepted', acceptedAt: nowIso(), acceptedBy: actor.id },
     actor,
   );
+  // Notify the original ASHA that handover was accepted
+  await createDoc(firestoreStore, COLLECTIONS.notifications, {
+    id: 'not3_' + handover.id,
+    recipientUserId: handover.fromWorkerId,
+    type: 'handover_accepted',
+    motherId: handover.motherId,
+    handoverId: handover.id,
+    readAt: null,
+    synthetic: SYNTHETIC_FLAG,
+    audit: newAudit(actor, nowIso()),
+  });
+  // Notify the receiving worker (already in their inbox, but mark read perhaps?)
+  return updated;
 }
 
 /**
@@ -161,6 +251,7 @@ export async function withdrawConsent(
   }
 
   const at = nowIso();
+  // Update the consent log
   const nextConsent = await updateDoc(
     firestoreStore,
     COLLECTIONS.consentLog,
@@ -169,6 +260,7 @@ export async function withdrawConsent(
     actor,
     at,
   );
+  // Update the handover status
   const nextHandover = await updateDoc(
     firestoreStore,
     COLLECTIONS.handovers,
@@ -177,6 +269,7 @@ export async function withdrawConsent(
     actor,
     at,
   );
+  // Update the mother's consent status
   await updateDoc(
     firestoreStore,
     COLLECTIONS.mothers,
@@ -185,6 +278,27 @@ export async function withdrawConsent(
     actor,
     at,
   );
+  // Notify both workers that consent was withdrawn
+  await createDoc(firestoreStore, COLLECTIONS.notifications, {
+    id: 'not4_' + handover.id,
+    recipientUserId: handover.fromWorkerId,
+    type: 'consent_withdrawn',
+    motherId: handover.motherId,
+    handoverId: handover.id,
+    readAt: null,
+    synthetic: SYNTHETIC_FLAG,
+    audit: newAudit(actor, nowIso()),
+  });
+  await createDoc(firestoreStore, COLLECTIONS.notifications, {
+    id: 'not5_' + handover.id,
+    recipientUserId: handover.toWorkerId,
+    type: 'consent_withdrawn',
+    motherId: handover.motherId,
+    handoverId: handover.id,
+    readAt: null,
+    synthetic: SYNTHETIC_FLAG,
+    audit: newAudit(actor, nowIso()),
+  });
 
   return { handover: nextHandover, consent: nextConsent };
 }

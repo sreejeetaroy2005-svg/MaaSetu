@@ -1,84 +1,78 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
-import { ErrorState, LoadingState, PlaceholderNote } from '../components/StateBlock';
+import { EmptyState } from '../components/StateBlock';
+import { Button, Card, Notice, inputClass, labelClass } from '../components/ui';
 import { useSession } from '../context/SessionContext';
-import type { Language, Role, User, Village } from '../data/model';
-import { useAsyncData } from '../hooks/useAsyncData';
-import { listVillages, listWorkersByRole, registerMother } from '../services/journeyService';
-import { LANGUAGES, LANGUAGE_LABELS, type LanguageCode } from '../i18n';
+import type { Language } from '../data/model';
+import { useVillages } from '../hooks/useVillages';
+import { isValidPhone, normalizePhone } from '../services/authService';
+import { phoneAlreadyUsed, registerMother } from '../services/journeyService';
+import { LANGUAGES, type LanguageCode } from '../i18n';
 
-type WorkerRole = Extract<Role, 'asha' | 'anm'>;
-
-interface FormData {
-  villages: Village[];
-  worker: User | null;
-}
-
-/** Register a mother: name, village, preferred language, expected delivery month. */
-export default function RegisterMotherPage({ role }: { role: WorkerRole }) {
+/**
+ * Register a mother: name, phone, village, preferred language and expected
+ * delivery month. Her phone is what she later signs in with, so an ASHA must
+ * record it here.
+ */
+export default function RegisterMotherPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { workerIdFor, actorFor } = useSession();
-  const selectedId = workerIdFor(role);
+  const { worker, actor } = useSession();
+  const villages = useVillages();
+  const role = worker?.role ?? 'asha';
+  const base = `/${role}`;
 
   const [name, setName] = useState('');
-  const [village, setVillage] = useState('');
+  const [phone, setPhone] = useState('');
+  const [village, setVillage] = useState(worker?.village ?? '');
   const [language, setLanguage] = useState<Language>('mr');
   const [month, setMonth] = useState('');
-  const [errors, setErrors] = useState<{ name?: boolean; village?: boolean; month?: boolean }>({});
+  const [errors, setErrors] = useState<Record<string, boolean>>({});
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
 
-  const { data, loading, error, reload } = useAsyncData<FormData>(async () => {
-    const [villages, workers] = await Promise.all([listVillages(), listWorkersByRole(role)]);
-    const worker = workers.find((w) => w.id === selectedId) ?? workers[0] ?? null;
-    return { villages, worker };
-  }, [role, selectedId]);
-
-  // Pre-fill from the worker: her village and the language she uses.
-  useEffect(() => {
-    if (!data?.worker) return;
-    setVillage((current) => current || data.worker!.village);
-    setLanguage((current) => (current === 'mr' ? data.worker!.language : current));
-  }, [data]);
-
-  const onSubmit = async (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     const nextErrors = {
       name: name.trim().length < 2,
+      phone: !isValidPhone(phone),
       village: village.length === 0,
       month: month.length === 0,
     };
     setErrors(nextErrors);
-    if (nextErrors.name || nextErrors.village || nextErrors.month) return;
+    setSaveFailed(false);
+    if (nextErrors.name || nextErrors.phone || nextErrors.village || nextErrors.month) return;
 
     setSaving(true);
-    setSaveError(false);
     try {
+      const normalized = normalizePhone(phone);
+      if (await phoneAlreadyUsed(normalized)) {
+        setErrors({ phoneUsed: true });
+        return;
+      }
       const { mother } = await registerMother(
-        { name, village, language, expectedDeliveryMonth: month },
-        actorFor(role),
+        { name, phone: normalized, village, language, expectedDeliveryMonth: month },
+        actor ?? { id: worker?.id ?? '', role },
       );
-      void navigate(`/${role}/mothers/${mother.id}`);
+      void navigate(`${base}/mothers/${mother.id}`, { replace: true });
     } catch (caught) {
       console.error('MaaSetu: register mother failed', caught);
-      setSaveError(true);
+      setSaveFailed(true);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <AppShell roleArea={role} backTo={`/${role}`} title={t('register.title')}>
-      {loading ? <LoadingState label={t('shared.loading')} /> : null}
-      {error ? <ErrorState onRetry={reload} /> : null}
-
-      {!loading && !error ? (
-        <form onSubmit={(event) => void onSubmit(event)} className="space-y-4">
-          <div>
-            <label htmlFor="mother-name" className="block text-base font-semibold text-slate-800">
+    <AppShell backTo={base} title={t('register.title')} subtitle={t('register.subtitle')}>
+      {!worker ? (
+        <EmptyState title={t('journey.noAccessTitle')} body={t('journey.noAccessBody')} />
+      ) : (
+        <form onSubmit={(event) => void submit(event)} className="space-y-3">
+          <Card>
+            <label htmlFor="mother-name" className={labelClass}>
               {t('register.name')}
             </label>
             <input
@@ -88,59 +82,69 @@ export default function RegisterMotherPage({ role }: { role: WorkerRole }) {
               onChange={(event) => setName(event.target.value)}
               placeholder={t('register.namePlaceholder')}
               autoComplete="off"
-              className="mt-1 min-h-12 w-full rounded-xl border-2 border-slate-300 bg-white px-3 text-base"
+              className={inputClass}
             />
             {errors.name ? (
-              <p role="alert" className="mt-1 text-sm font-semibold text-red-700">
-                {t('register.errorName')}
-              </p>
+              <Notice tone="error" className="mt-2">{t('register.errorName')}</Notice>
             ) : null}
-          </div>
 
-          <div>
-            <label htmlFor="mother-village" className="block text-base font-semibold text-slate-800">
+            <label htmlFor="mother-phone" className={`${labelClass} mt-4`}>
+              {t('register.phone')}
+            </label>
+            <input
+              id="mother-phone"
+              type="tel"
+              inputMode="tel"
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              placeholder={t('auth.phonePlaceholder')}
+              className={inputClass}
+            />
+            <p className="mt-2 text-sm leading-relaxed text-slate-600">{t('register.phoneHint')}</p>
+            {errors.phone ? (
+              <Notice tone="error" className="mt-2">{t('register.errorPhone')}</Notice>
+            ) : null}
+            {errors.phoneUsed ? (
+              <Notice tone="error" className="mt-2">{t('register.errorPhoneUsed')}</Notice>
+            ) : null}
+
+            <label htmlFor="mother-village" className={`${labelClass} mt-4`}>
               {t('register.village')}
             </label>
             <select
               id="mother-village"
               value={village}
               onChange={(event) => setVillage(event.target.value)}
-              className="mt-1 min-h-12 w-full rounded-xl border-2 border-slate-300 bg-white px-3 text-base"
+              className={inputClass}
             >
               <option value="">{t('register.villagePlaceholder')}</option>
-              {(data?.villages ?? []).map((item) => (
+              {villages.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
                 </option>
               ))}
             </select>
             {errors.village ? (
-              <p role="alert" className="mt-1 text-sm font-semibold text-red-700">
-                {t('register.errorVillage')}
-              </p>
+              <Notice tone="error" className="mt-2">{t('register.errorVillage')}</Notice>
             ) : null}
-          </div>
 
-          <div>
-            <label htmlFor="mother-language" className="block text-base font-semibold text-slate-800">
+            <label htmlFor="mother-language" className={`${labelClass} mt-4`}>
               {t('register.language')}
             </label>
             <select
               id="mother-language"
               value={language}
               onChange={(event) => setLanguage(event.target.value as Language)}
-              className="mt-1 min-h-12 w-full rounded-xl border-2 border-slate-300 bg-white px-3 text-base"
+              className={inputClass}
             >
               {LANGUAGES.map((code: LanguageCode) => (
                 <option key={code} value={code}>
-                  {LANGUAGE_LABELS[code]} · {t(`language.${code}`)}
+                  {t(`language.${code}`)}
                 </option>
               ))}
             </select>
-          </div>
 
-          <div>
-            <label htmlFor="mother-month" className="block text-base font-semibold text-slate-800">
+            <label htmlFor="mother-month" className={`${labelClass} mt-4`}>
               {t('register.deliveryMonth')}
             </label>
             <input
@@ -148,32 +152,21 @@ export default function RegisterMotherPage({ role }: { role: WorkerRole }) {
               type="month"
               value={month}
               onChange={(event) => setMonth(event.target.value)}
-              className="mt-1 min-h-12 w-full rounded-xl border-2 border-slate-300 bg-white px-3 text-base"
+              className={inputClass}
             />
             {errors.month ? (
-              <p role="alert" className="mt-1 text-sm font-semibold text-red-700">
-                {t('register.errorMonth')}
-              </p>
+              <Notice tone="error" className="mt-2">{t('register.errorMonth')}</Notice>
             ) : null}
-          </div>
+          </Card>
 
-          <PlaceholderNote>{t('register.hint')}</PlaceholderNote>
+          <Notice tone="info">{t('register.hint')}</Notice>
+          {saveFailed ? <Notice tone="error">{t('register.errorSave')}</Notice> : null}
 
-          {saveError ? (
-            <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm font-semibold text-red-800">
-              {t('register.errorSave')}
-            </p>
-          ) : null}
-
-          <button
-            type="submit"
-            disabled={saving}
-            className="min-h-14 w-full rounded-2xl bg-brand-700 px-4 text-base font-bold text-white disabled:opacity-60"
-          >
+          <Button type="submit" full disabled={saving}>
             {saving ? t('shared.saving') : t('register.submit')}
-          </button>
+          </Button>
         </form>
-      ) : null}
+      )}
     </AppShell>
   );
 }

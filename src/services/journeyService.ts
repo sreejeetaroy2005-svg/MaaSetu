@@ -102,10 +102,49 @@ export async function fetchJourneyCard(motherId: string): Promise<JourneyCard | 
 
 export interface RegisterMotherInput {
   name: string;
+  /** E.164 phone number she will sign in with (synthetic in this prototype). */
+  phone: string;
   village: string;
   language: Language;
   /** `YYYY-MM` as chosen in the form. */
   expectedDeliveryMonth: string;
+}
+
+/** A phone number can only belong to one person in the demo dataset. */
+export async function phoneAlreadyUsed(phone: string): Promise<boolean> {
+  const [workers, mothers] = await Promise.all([
+    getDocs(query(collection(db, COLLECTIONS.users), where('phone', '==', phone), limit(1))),
+    getDocs(query(collection(db, COLLECTIONS.mothers), where('phone', '==', phone), limit(1))),
+  ]);
+  return workers.size > 0 || mothers.size > 0;
+}
+
+export interface RegisterWorkerInput {
+  name: string;
+  role: 'asha' | 'anm';
+  village: string;
+  phone: string;
+  language: Language;
+}
+
+/** Create a worker account. Sign-in itself is phone-OTP, handled by authService. */
+export async function registerWorker(
+  input: RegisterWorkerInput,
+  actor: Actor,
+): Promise<User> {
+  const at = nowIso();
+  const worker: User = {
+    id: newId('usr'),
+    name: input.name.trim(),
+    role: input.role,
+    village: input.village,
+    phone: input.phone,
+    language: input.language,
+    synthetic: SYNTHETIC_FLAG,
+    audit: newAudit(actor, at),
+  };
+  await createDoc(firestoreStore, COLLECTIONS.users, worker);
+  return worker;
 }
 
 /**
@@ -122,6 +161,7 @@ export async function registerMother(
     name: input.name.trim(),
     village: input.village,
     registeredBy: actor.id,
+    phone: input.phone,
     language: input.language,
     consentStatus: 'pending',
     expectedDeliveryMonth: input.expectedDeliveryMonth,

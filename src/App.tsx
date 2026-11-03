@@ -1,57 +1,159 @@
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { ROLE_PATH, RoleProvider, useRole } from './context/RoleContext';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import {
+  RequireMother,
+  RequireWorker,
+  SignedOutOnly,
+} from './components/RequireSession';
 import { SessionProvider } from './context/SessionContext';
 import HandoverConsentPage from './pages/HandoverConsentPage';
 import JourneyCardPage from './pages/JourneyCardPage';
 import MotherHome from './pages/MotherHome';
 import NotFound from './pages/NotFound';
+import NotificationInbox from './pages/NotificationInbox';
 import RegisterMotherPage from './pages/RegisterMotherPage';
+import StartAuthPage from './pages/StartAuthPage';
+import StartChoicePage from './pages/StartChoicePage';
+import WelcomeScreen from './pages/WelcomeScreen';
+import WhatsAppPreviewPage from './pages/WhatsAppPreviewPage';
 import WorkerHome from './pages/WorkerHome';
-
-/** `/` opens whichever role area the demo switcher last selected. */
-function HomeRedirect() {
-  const { role } = useRole();
-  return <Navigate to={ROLE_PATH[role]} replace />;
-}
 
 export default function App() {
   const { t, i18n } = useTranslation();
 
   useEffect(() => {
-    document.title = `${t('app.name')} · ${i18n.language.toUpperCase()}`;
+    document.title = `${t('app.name')} · ${t('app.tagline')}`;
   }, [t, i18n.language]);
 
   return (
-    <RoleProvider>
-      <SessionProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<HomeRedirect />} />
+    <SessionProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* Entry flow: only for visitors without a session */}
+          <Route
+            path="/"
+            element={
+              <SignedOutOnly>
+                <WelcomeScreen />
+              </SignedOutOnly>
+            }
+          />
+          <Route
+            path="/start"
+            element={
+              <SignedOutOnly>
+                <StartChoicePage />
+              </SignedOutOnly>
+            }
+          />
+          <Route
+            path="/start/:type"
+            element={
+              <SignedOutOnly>
+                <StartAuthPage />
+              </SignedOutOnly>
+            }
+          />
 
-            <Route path="/asha" element={<WorkerHome role="asha" />} />
-            <Route path="/asha/register" element={<RegisterMotherPage role="asha" />} />
-            <Route path="/asha/mothers/:motherId" element={<JourneyCardPage role="asha" />} />
-            <Route
-              path="/asha/mothers/:motherId/handover"
-              element={<HandoverConsentPage role="asha" />}
-            />
+          {/* ASHA / ANM areas */}
+          <Route
+            path="/asha"
+            element={
+              <RequireWorker role="asha">
+                <WorkerHome />
+              </RequireWorker>
+            }
+          />
+          <Route
+            path="/asha/register"
+            element={
+              <RequireWorker role="asha">
+                <RegisterMotherPage />
+              </RequireWorker>
+            }
+          />
+          <Route
+            path="/asha/mothers/:motherId"
+            element={
+              <RequireWorker role="asha">
+                <JourneyCardPage />
+              </RequireWorker>
+            }
+          />
+          <Route
+            path="/asha/mothers/:motherId/handover"
+            element={
+              <RequireWorker role="asha">
+                <HandoverConsentPage />
+              </RequireWorker>
+            }
+          />
 
-            <Route path="/anm" element={<WorkerHome role="anm" />} />
-            <Route path="/anm/register" element={<RegisterMotherPage role="anm" />} />
-            <Route path="/anm/mothers/:motherId" element={<JourneyCardPage role="anm" />} />
-            <Route
-              path="/anm/mothers/:motherId/handover"
-              element={<HandoverConsentPage role="anm" />}
-            />
+          <Route
+            path="/anm"
+            element={
+              <RequireWorker role="anm">
+                <WorkerHome />
+              </RequireWorker>
+            }
+          />
+          <Route
+            path="/anm/register"
+            element={
+              <RequireWorker role="anm">
+                <RegisterMotherPage />
+              </RequireWorker>
+            }
+          />
+          <Route
+            path="/anm/mothers/:motherId"
+            element={
+              <RequireWorker role="anm">
+                <JourneyCardPage />
+              </RequireWorker>
+            }
+          />
+          <Route
+            path="/anm/mothers/:motherId/handover"
+            element={
+              <RequireWorker role="anm">
+                <HandoverConsentPage />
+              </RequireWorker>
+            }
+          />
 
-            <Route path="/mother" element={<MotherHome />} />
+          {/* Mother area */}
+          <Route
+            path="/mother"
+            element={
+              <RequireMother>
+                <MotherHome />
+              </RequireMother>
+            }
+          />
 
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </BrowserRouter>
-      </SessionProvider>
-    </RoleProvider>
+          {/* Worker tools */}
+          <Route
+            path="/notifications"
+            element={
+              <RequireWorker>
+                <NotificationInbox />
+              </RequireWorker>
+            }
+          />
+          <Route
+            path="/whatsapp-preview"
+            element={
+              <RequireWorker>
+                <WhatsAppPreviewPage />
+              </RequireWorker>
+            }
+          />
+
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </BrowserRouter>
+    </SessionProvider>
   );
 }

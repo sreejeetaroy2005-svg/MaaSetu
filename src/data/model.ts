@@ -69,6 +69,11 @@ export interface Mother extends AuditedDoc {
   village: string;
   /** User id of the worker who registered her. */
   registeredBy: string;
+  /**
+   * E.164 phone number recorded by her ASHA. Used only to match her at
+   * sign-in (phone-OTP) — synthetic numbers only (99999900xx).
+   */
+  phone: string;
   language: Language;
   consentStatus: ConsentStatus;
   /** `YYYY-MM` as entered at registration; displayed only, never computed. */
@@ -188,6 +193,20 @@ export interface AuditLogEntry {
   synthetic: typeof SYNTHETIC_FLAG;
 }
 
+/**
+ * A notification sent to a user about a handover event.
+ * All text is rendered from translation files — no health data is embedded.
+ */
+export interface Notification extends AuditedDoc {
+  id: string;
+  recipientUserId: string;
+  type: 'handover_requested' | 'handover_accepted' | 'handover_overdue' | 'consent_withdrawn';
+  motherId: string;
+  handoverId: string | null;
+  readAt: string | null;
+  text: string;
+}
+
 /** Firestore collection names, in one place. */
 export const COLLECTIONS = {
   villages: 'villages',
@@ -197,6 +216,7 @@ export const COLLECTIONS = {
   handovers: 'handovers',
   consentLog: 'consentLog',
   auditLog: 'auditLog',
+  notifications: 'notifications',
 } as const;
 
 export type CollectionName = (typeof COLLECTIONS)[keyof typeof COLLECTIONS];

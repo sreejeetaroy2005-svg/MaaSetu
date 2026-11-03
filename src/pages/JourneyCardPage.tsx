@@ -16,7 +16,6 @@ import type {
   JourneyCard,
   MilestoneStatus,
   Mother,
-  Role,
   User,
   Village,
 } from '../data/model';
@@ -34,8 +33,6 @@ import {
 } from '../services/journeyService';
 import { formatDate, formatMonth, todayIso } from '../utils/date';
 
-type WorkerRole = Extract<Role, 'asha' | 'anm'>;
-
 interface CardData {
   mother: Mother;
   card: JourneyCard | null;
@@ -52,12 +49,14 @@ interface CardData {
  *  - after acceptance the receiving worker edits, the sending worker reads
  *  - after a withdrawal only her home village can open the card
  */
-export default function JourneyCardPage({ role }: { role: WorkerRole }) {
+export default function JourneyCardPage() {
   const { motherId } = useParams<{ motherId: string }>();
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const { actorFor } = useSession();
-  const actor = actorFor(role);
+  const { worker: signedInWorker, actor: sessionActor } = useSession();
+  const role = signedInWorker?.role ?? 'asha';
+  const base = `/${role}`;
+  const actor = sessionActor ?? { id: signedInWorker?.id ?? '', role };
 
   const { data, loading, error, reload } = useAsyncData<CardData | null>(async () => {
     if (!motherId) return null;
@@ -103,11 +102,11 @@ export default function JourneyCardPage({ role }: { role: WorkerRole }) {
   );
   const villageName = (id: string) => villageNames[id] ?? '';
 
-  const worker = data?.users.find((user) => user.id === actor.id) ?? null;
+  const viewer = data?.users.find((user) => user.id === actor.id) ?? null;
   const status = data ? motherStatus(data.mother, data.handovers) : null;
-  const access = data ? accessFor(worker, data.mother, data.handovers) : 'blocked';
+  const access = data ? accessFor(viewer, data.mother, data.handovers) : 'blocked';
   const handover = status?.handover ?? null;
-  const workerVillageId = worker?.village ?? '';
+  const workerVillageId = viewer?.village ?? '';
   /** The receiving village's team (they share the accepted card). */
   const isReceivingVillage = handover !== null && handover.toVillage === workerVillageId;
   const canEdit = access === 'edit';
@@ -133,11 +132,11 @@ export default function JourneyCardPage({ role }: { role: WorkerRole }) {
   };
 
   const accept = async () => {
-    if (!handover || !worker) return;
+    if (!handover || !viewer) return;
     setBusy(true);
     setSaveError(false);
     try {
-      await acceptHandover(handover, worker, actor);
+      await acceptHandover(handover, viewer, actor);
       reload();
     } catch (caught) {
       console.error('MaaSetu: accept failed', caught);
@@ -165,7 +164,7 @@ export default function JourneyCardPage({ role }: { role: WorkerRole }) {
   };
 
   return (
-    <AppShell roleArea={role} backTo={`/${role}`} title={t('journey.title')}>
+    <AppShell backTo={base} title={t('journey.title')} subtitle={data?.mother.name}>
       {loading ? <LoadingState label={t('journey.loading')} /> : null}
       {error ? <ErrorState onRetry={reload} /> : null}
 
@@ -197,13 +196,10 @@ export default function JourneyCardPage({ role }: { role: WorkerRole }) {
       {!loading && !error && data && access !== 'blocked' && status ? (
         <>
           <section className="rounded-3xl border-2 border-brand-100 bg-white p-4">
-            <h2 className="text-2xl leading-tight font-bold text-slate-900">{data.mother.name}</h2>
-            <div className="mt-2">
-              <StatusBadge status={status} villageName={villageName(statusVillageId(status))} />
-            </div>
-            <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-3">
+            <StatusBadge status={status} villageName={villageName(statusVillageId(status))} />
+            <dl className="mt-4 space-y-3 border-t border-slate-200 pt-4">
               <div>
-                <dt className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                <dt className="text-sm font-semibold text-slate-500">
                   {t('journey.currentVillage')}
                 </dt>
                 <dd className="text-base font-semibold text-slate-900">
@@ -211,7 +207,7 @@ export default function JourneyCardPage({ role }: { role: WorkerRole }) {
                 </dd>
               </div>
               <div>
-                <dt className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                <dt className="text-sm font-semibold text-slate-500">
                   {t('journey.currentWorker')}
                 </dt>
                 <dd className="text-base font-semibold text-slate-900">
@@ -219,7 +215,7 @@ export default function JourneyCardPage({ role }: { role: WorkerRole }) {
                 </dd>
               </div>
               <div>
-                <dt className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                <dt className="text-sm font-semibold text-slate-500">
                   {t('journey.language')}
                 </dt>
                 <dd className="text-base font-semibold text-slate-900">
@@ -227,7 +223,7 @@ export default function JourneyCardPage({ role }: { role: WorkerRole }) {
                 </dd>
               </div>
               <div>
-                <dt className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                <dt className="text-sm font-semibold text-slate-500">
                   {t('journey.expectedDelivery')}
                 </dt>
                 <dd className="text-base font-semibold text-slate-900">

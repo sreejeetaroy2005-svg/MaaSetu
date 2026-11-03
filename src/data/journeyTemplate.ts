@@ -29,37 +29,37 @@ export const MILESTONE_TEMPLATE: MilestoneTemplateItem[] = [
   {
     templateId: 'registration',
     labelKey: 'milestones.registration',
-    fallbackLabel: '[PLACEHOLDER] Registration',
+    fallbackLabel: 'Registration',
   },
   {
     templateId: 'antenatal_1',
     labelKey: 'milestones.antenatal1',
-    fallbackLabel: '[PLACEHOLDER] Antenatal visit 1',
+    fallbackLabel: 'Antenatal visit 1',
   },
   {
     templateId: 'antenatal_2',
     labelKey: 'milestones.antenatal2',
-    fallbackLabel: '[PLACEHOLDER] Antenatal visit 2',
+    fallbackLabel: 'Antenatal visit 2',
   },
   {
     templateId: 'antenatal_3',
     labelKey: 'milestones.antenatal3',
-    fallbackLabel: '[PLACEHOLDER] Antenatal visit 3',
+    fallbackLabel: 'Antenatal visit 3',
   },
   {
     templateId: 'delivery',
     labelKey: 'milestones.delivery',
-    fallbackLabel: '[PLACEHOLDER] Delivery',
+    fallbackLabel: 'Delivery',
   },
   {
     templateId: 'postnatal_1',
     labelKey: 'milestones.postnatal1',
-    fallbackLabel: '[PLACEHOLDER] Postnatal visit 1',
+    fallbackLabel: 'Postnatal visit 1',
   },
   {
     templateId: 'postnatal_2',
     labelKey: 'milestones.postnatal2',
-    fallbackLabel: '[PLACEHOLDER] Postnatal visit 2',
+    fallbackLabel: 'Postnatal visit 2',
   },
 ];
 

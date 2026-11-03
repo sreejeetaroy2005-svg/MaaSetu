@@ -6,23 +6,15 @@ import { EmptyState, ErrorState, LoadingState, PlaceholderNote } from '../compon
 import { CheckIcon, LockIcon, UserIcon } from '../components/icons';
 import { useSession } from '../context/SessionContext';
 import { motherStatus } from '../data/handover';
-import type { Handover, Mother, Role, User, Village } from '../data/model';
+import type { Handover, Mother, User, Village } from '../data/model';
 import { useAsyncData } from '../hooks/useAsyncData';
 import { listAllHandovers, startHandover } from '../services/handoverService';
-import {
-  fetchMother,
-  listAllUsers,
-  listVillages,
-  listWorkersByRole,
-} from '../services/journeyService';
+import { fetchMother, listAllUsers, listVillages } from '../services/journeyService';
 import { formatDate, todayIso } from '../utils/date';
-
-type WorkerRole = Extract<Role, 'asha' | 'anm'>;
 
 interface ConsentData {
   mother: Mother;
   villages: Village[];
-  workers: User[];
   users: User[];
   handovers: Handover[];
   /** Village this worker belongs to (her own). */
@@ -34,21 +26,22 @@ interface ConsentData {
  * will be shared, record her consent (checkbox + timestamp + who recorded it),
  * then create the pending handover. No consent → no handover, no data access.
  */
-export default function HandoverConsentPage({ role }: { role: WorkerRole }) {
+export default function HandoverConsentPage() {
   const { motherId } = useParams<{ motherId: string }>();
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const { actorFor } = useSession();
-  const actor = actorFor(role);
+  const { worker: signedInWorker, actor: sessionActor } = useSession();
+  const role = signedInWorker?.role ?? 'asha';
+  const base = `/${role}`;
+  const actor = sessionActor ?? { id: signedInWorker?.id ?? '', role };
 
   const { data, loading, error, reload } = useAsyncData<ConsentData | null>(async () => {
     if (!motherId) return null;
-    const [mother, villages, users, handovers, workers] = await Promise.all([
+    const [mother, villages, users, handovers] = await Promise.all([
       fetchMother(motherId),
       listVillages(),
       listAllUsers(),
       listAllHandovers(),
-      listWorkersByRole(role),
     ]);
     if (!mother) return null;
     return {
@@ -56,10 +49,9 @@ export default function HandoverConsentPage({ role }: { role: WorkerRole }) {
       villages,
       users,
       handovers: handovers.filter((h) => h.motherId === mother.id),
-      workers,
-      fromWorker: workers.find((w) => w.id === actor.id) ?? workers[0] ?? null,
+      fromWorker: signedInWorker,
     };
-  }, [motherId, role, actor.id]);
+  }, [motherId, signedInWorker?.id]);
 
   const [toVillageId, setToVillageId] = useState('');
   const [toWorkerId, setToWorkerId] = useState('');
@@ -122,7 +114,7 @@ export default function HandoverConsentPage({ role }: { role: WorkerRole }) {
         },
         actor,
       );
-      void navigate(`/${role}/mothers/${data.mother.id}`);
+      void navigate(`${base}/mothers/${data.mother.id}`, { replace: true });
     } catch (caught) {
       console.error('MaaSetu: handover failed', caught);
       setSaveError(true);
@@ -133,9 +125,9 @@ export default function HandoverConsentPage({ role }: { role: WorkerRole }) {
 
   return (
     <AppShell
-      roleArea={role}
-      backTo={motherId ? `/${role}/mothers/${motherId}` : `/${role}`}
+      backTo={motherId ? `${base}/mothers/${motherId}` : base}
       title={t('handover.title')}
+      subtitle={data?.mother.name}
     >
       {loading ? <LoadingState label={t('shared.loading')} /> : null}
       {error ? <ErrorState onRetry={reload} /> : null}
@@ -147,7 +139,7 @@ export default function HandoverConsentPage({ role }: { role: WorkerRole }) {
           body={t('journey.missingBody')}
           action={
             <Link
-              to={`/${role}`}
+              to={base}
               className="inline-flex min-h-12 items-center rounded-xl bg-brand-700 px-5 text-base font-bold text-white"
             >
               {t('journey.backToList')}
@@ -173,7 +165,7 @@ export default function HandoverConsentPage({ role }: { role: WorkerRole }) {
               <h3 className="text-base font-bold text-amber-900">{t('handover.alreadyTitle')}</h3>
               <p className="mt-1 text-sm text-amber-900">{t('handover.alreadyBody')}</p>
               <Link
-                to={`/${role}/mothers/${data.mother.id}`}
+                to={`${base}/mothers/${data.mother.id}`}
                 className="mt-3 inline-flex min-h-12 items-center rounded-xl bg-brand-700 px-5 text-base font-bold text-white"
               >
                 {t('handover.openCard')}
