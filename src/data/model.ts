@@ -105,6 +105,8 @@ export interface VisitRevision {
   note: string;
   editedBy: string;
   editedAt: string;
+  /** True when the version was entered on a device and synced later. */
+  device?: boolean;
 }
 
 /**
@@ -121,6 +123,10 @@ export interface Visit {
   note: string;
   /** Empty until someone corrects the entry. */
   revisions: VisitRevision[];
+  /** True while the entry only exists on this device. */
+  pendingSync?: boolean;
+  /** Server time at which the queued entry reached Firestore. */
+  syncedAt?: string | null;
 }
 
 export interface JourneyCard extends AuditedDoc {
@@ -148,6 +154,13 @@ export interface Handover extends AuditedDoc {
   /** The consent record this handover was created from. */
   consentId: string;
   createdAt: string;
+  /**
+   * First time a worker of the receiving village opened her summary. Written
+   * only after the server confirms it, so the tracker never claims a step
+   * happened before the server knows. Null for earlier records.
+   */
+  seenAt?: string | null;
+  seenBy?: string | null;
   acceptedAt: string | null;
   acceptedBy: string | null;
   revokedAt: string | null;
@@ -175,6 +188,9 @@ export interface ConsentLogEntry extends AuditedDoc {
   withdrawnAt: string | null;
   withdrawnBy: string | null;
 }
+
+/** Alias kept for the offline layer's small helper types. */
+export type AudienceSyncState = 'waiting' | 'syncing' | 'synced' | 'failed' | 'rejected';
 
 /**
  * Append-only audit trail: one entry per write, on every collection.
@@ -207,6 +223,36 @@ export interface Notification extends AuditedDoc {
   text: string;
 }
 
+/**
+ * Two versions of the same record, kept together when an offline change meets
+ * a newer server version. Nothing is silently overwritten: the server version
+ * stays in place and this record holds both versions with their author and
+ * timestamp, so the card can show them side by side.
+ */
+export type ConflictKind = 'visit.edit' | 'milestone.status' | 'milestone.dueDate' | 'handover';
+
+export interface ConflictRecord extends AuditedDoc {
+  id: string;
+  motherId: string;
+  cardId: string | null;
+  kind: ConflictKind;
+  /** Visit id or milestone template id; a handover id for handover conflicts. */
+  recordId: string;
+  ours: {
+    value: string;
+    by: string;
+    byName: string;
+    /** Device clock, when the person entered it. */
+    at: string;
+  };
+  theirs: {
+    value: string;
+    by: string;
+    at: string;
+  };
+  resolution: 'kept-both';
+}
+
 /** Firestore collection names, in one place. */
 export const COLLECTIONS = {
   villages: 'villages',
@@ -217,6 +263,7 @@ export const COLLECTIONS = {
   consentLog: 'consentLog',
   auditLog: 'auditLog',
   notifications: 'notifications',
+  conflicts: 'conflicts',
 } as const;
 
 export type CollectionName = (typeof COLLECTIONS)[keyof typeof COLLECTIONS];

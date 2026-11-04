@@ -190,3 +190,88 @@ export function CloseIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function WifiIcon({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M2 8.8a16 16 0 0 1 20 0M5 12.6a11 11 0 0 1 14 0M8.5 16.4a6 6 0 0 1 7 0" />
+      <path d="M12 20h.01" />
+    </svg>
+  );
+}
+
+export function WifiOffIcon({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M2 2l20 20" />
+      <path d="M8.5 16.4a6 6 0 0 1 7 0M5 12.6a11 11 0 0 1 5-2.6M2 8.8a16 16 0 0 1 5-2.6M14.5 6.4a16 16 0 0 1 7.5 2.4" />
+      <path d="M12 20h.01" />
+    </svg>
+  );
+}
+
+export function GaugeIcon({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M4 18a9 9 0 1 1 16 0" />
+      <path d="M12 14l4-4" />
+      <path d="M4 18h4M16 18h4" />
+    </svg>
+  );
+}
+
+export function CloudDoneIcon({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M6 18h11a4 4 0 0 0 .6-7.9A6 6 0 0 0 6.2 9 4.5 4.5 0 0 0 6 18Z" />
+      <path d="m10 13 2 2 4-4" />
+    </svg>
+  );
+}
+
+export function RefreshIcon({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M20 12a8 8 0 1 1-2.6-5.9" />
+      <path d="M20 4v4h-4" />
+    </svg>
+  );
+}
+
+export function QrIcon({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <path d="M14 14h3v3h-3zM20 14h1M14 20h1M18 20h3" />
+    </svg>
+  );
+}
+
+export function AlertIcon({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M12 3 2.5 20h19L12 3Z" />
+      <path d="M12 9v5M12 17h.01" />
+    </svg>
+  );
+}
+
+export function SmsIcon({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.5-4.5A8 8 0 0 1 13 4a8 8 0 0 1 8 8Z" />
+      <path d="M8.5 12h.01M12 12h.01M15.5 12h.01" />
+    </svg>
+  );
+}
+
+export function ShieldIcon({ className }: IconProps) {
+  return (
+    <svg {...base(className)}>
+      <path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3Z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  );
+}

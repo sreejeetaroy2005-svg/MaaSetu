@@ -8,7 +8,7 @@
  * Every write goes through the audit helpers, so each step appends to
  * `auditLog` and stamps the document with who/when.
  */
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs, getDocsFromServer, query, where } from 'firebase/firestore';
 import {
   COLLECTIONS,
   SYNTHETIC_FLAG,
@@ -17,20 +17,27 @@ import {
   type Mother,
   type User,
 } from '../data/model';
+import { HANDOVER_OVERDUE_HOURS } from '../data/tracker';
 import { createDoc, newAudit, nowIso, updateDoc, type Actor } from './audit';
 import { db, firestoreStore } from './firebase';
 function newId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID()}`;
 }
 
-/** Config: handover overdue timeout in hours */
-const OVERDUE_HOURS = 48;
+/** Config: handover overdue timeout in hours (shared with the care tracker). */
+const OVERDUE_HOURS = HANDOVER_OVERDUE_HOURS;
 
 /* ------------------------------------------------------------------ reads */
 
 export async function listAllHandovers(): Promise<Handover[]> {
   const snap = await getDocs(collection(db, COLLECTIONS.handovers));
   return snap.docs.map((d) => d.data() as Handover);
+}
+
+/** Every consent record — used to warm the offline copy in one pass. */
+export async function listAllConsentLogs(): Promise<ConsentLogEntry[]> {
+  const snap = await getDocs(collection(db, COLLECTIONS.consentLog));
+  return snap.docs.map((d) => d.data() as ConsentLogEntry);
 }
 
 export async function listConsentLogs(motherId: string): Promise<ConsentLogEntry[]> {
@@ -42,56 +49,99 @@ export async function listConsentLogs(motherId: string): Promise<ConsentLogEntry
     .sort((a, b) => (a.grantedAt ?? '').localeCompare(b.grantedAt ?? ''));
 }
 
-/** Check for overdue handovers and create notifications */
-export async function checkOverdueHandovers() {
-  const now = new Date();
-  const handovers = await listAllHandovers();
-  const notificationsRef = collection(db, COLLECTIONS.notifications);
-  const existingNotifs = await getDocs(query(notificationsRef, where('type', '==', 'handover_overdue')));
-  const existingOverdueIds = new Set(existingNotifs.docs.map((d) => d.id));
-
-  handovers.forEach(async (handover) => {
-    if (handover.status !== 'pending') return;
-
-    const createdAt = new Date(handover.createdAt);
-    const diffHours = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60);
-
-    if (diffHours > OVERDUE_HOURS) {
-      const motherId = handover.motherId;
-      const fromWorkerId = handover.fromWorkerId;
-      const toWorkerId = handover.toWorkerId;
-      const handoverId = handover.id;
-
-      // Avoid duplicate overdue notifications
-      const fromNotifId = `overdue_from_${handoverId}`;
-      const toNotifId = `overdue_to_${handoverId}`;
-
-      if (!existingOverdueIds.has(fromNotifId)) {
-        await createDoc(firestoreStore, COLLECTIONS.notifications, {
-          id: fromNotifId,
-          recipientUserId: fromWorkerId,
-          type: 'handover_overdue',
-          motherId,
-          handoverId,
-          readAt: null,
-          synthetic: SYNTHETIC_FLAG,
-          audit: { createdBy: 'system', createdByRole: 'system' as const, createdAt: nowIso(), updatedBy: 'system', updatedByRole: 'system' as const, updatedAt: nowIso() },
-        });
-      }
-      if (!existingOverdueIds.has(toNotifId)) {
-        await createDoc(firestoreStore, COLLECTIONS.notifications, {
-          id: toNotifId,
-          recipientUserId: toWorkerId,
-          type: 'handover_overdue',
-          motherId,
-          handoverId,
-          readAt: null,
-          synthetic: SYNTHETIC_FLAG,
-          audit: { createdBy: 'system', createdByRole: 'system' as const, createdAt: nowIso(), updatedBy: 'system', updatedByRole: 'system' as const, updatedAt: nowIso() },
-        });
-      }
-    }
+/**
+ * One overdue message per worker per handover, ever.
+ *
+ * The document id is derived from the handover and the recipient, and the
+ * write is skipped when that id already exists — so running the check twice
+ * (the demo button can be pressed again) adds nothing.
+ */
+async function ensureOverdueNotification(
+  handover: Handover,
+  recipientId: string,
+  existing: Set<string>,
+): Promise<boolean> {
+  const id = `overdue_${handover.id}_${recipientId}`;
+  if (existing.has(id)) return false;
+  const at = nowIso();
+  await createDoc(firestoreStore, COLLECTIONS.notifications, {
+    id,
+    recipientUserId: recipientId,
+    type: 'handover_overdue',
+    motherId: handover.motherId,
+    handoverId: handover.id,
+    readAt: null,
+    synthetic: SYNTHETIC_FLAG,
+    audit: {
+      createdBy: 'system:overdue',
+      createdByRole: 'system' as const,
+      createdAt: at,
+      updatedBy: 'system:overdue',
+      updatedByRole: 'system' as const,
+      updatedAt: at,
+    },
   });
+  existing.add(id);
+  return true;
+}
+
+/**
+ * Create the overdue messages for every pending handover that has waited too
+ * long, for both the sending and the receiving worker. Reads the existing
+ * messages from the server (never the cache) so a second run cannot duplicate
+ * them.
+ */
+export async function checkOverdueHandovers(
+  now: number = Date.now(),
+): Promise<{ overdueHandovers: number; created: number }> {
+  const handovers = await listAllHandovers();
+  const existingSnap = await getDocsFromServer(
+    query(collection(db, COLLECTIONS.notifications), where('type', '==', 'handover_overdue')),
+  );
+  const existing = new Set(existingSnap.docs.map((doc) => doc.id));
+
+  let overdueHandovers = 0;
+  let created = 0;
+
+  for (const handover of handovers) {
+    if (handover.status !== 'pending') continue;
+    if (now - Date.parse(handover.createdAt) <= OVERDUE_HOURS * 60 * 60 * 1000) continue;
+    overdueHandovers += 1;
+    // Both workers are told; a handover to herself would still notify once.
+    const recipients = [handover.fromWorkerId, handover.toWorkerId].filter(
+      (id, index, list) => id && list.indexOf(id) === index,
+    );
+    for (const recipient of recipients) {
+      if (await ensureOverdueNotification(handover, recipient, existing)) created += 1;
+    }
+  }
+
+  return { overdueHandovers, created };
+}
+
+/**
+ * DEMO ONLY — move every pending handover past the overdue limit, then send
+ * the overdue messages. Nothing about her care changes: only the request time,
+ * so the tracker and the inbox can be shown without touching the database.
+ */
+export async function simulateHandoverAge(
+  hours: number = OVERDUE_HOURS + 2,
+): Promise<{ aged: number; overdueHandovers: number; created: number }> {
+  const actor: Actor = { id: 'system:demo', role: 'system' };
+  const cutoff = Date.now() - OVERDUE_HOURS * 60 * 60 * 1000;
+  const agedAt = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+
+  const handovers = await listAllHandovers();
+  let aged = 0;
+  for (const handover of handovers) {
+    if (handover.status !== 'pending') continue;
+    if (Date.parse(handover.createdAt) <= cutoff) continue;
+    await updateDoc(firestoreStore, COLLECTIONS.handovers, handover, { createdAt: agedAt }, actor);
+    aged += 1;
+  }
+
+  const overdue = await checkOverdueHandovers();
+  return { aged, overdueHandovers: overdue.overdueHandovers, created: overdue.created };
 }
 
 /* ----------------------------------------------------------------- writes */
@@ -173,17 +223,8 @@ export async function startHandover(
     synthetic: SYNTHETIC_FLAG,
     audit: newAudit(actor, at),
   });
-  // Also notify the original ASHA that consent was recorded
-  await createDoc(firestoreStore, COLLECTIONS.notifications, {
-    id: 'not2_' + handover.id,
-    recipientUserId: input.fromWorker.id,
-    type: 'consent_recorded',
-    motherId: input.mother.id,
-    handoverId: handover.id,
-    readAt: null,
-    synthetic: SYNTHETIC_FLAG,
-    audit: newAudit(actor, at),
-  });
+  // The sending worker is not sent a message about the consent she just
+  // recorded herself: it would only inflate her unread bell with her own act.
   await updateDoc(
     firestoreStore,
     COLLECTIONS.mothers,
@@ -194,6 +235,26 @@ export async function startHandover(
   );
 
   return { handover, consent };
+}
+
+/**
+ * The receiving worker has opened her summary: record that she has seen it.
+ *
+ * Only called from the receiving village and only once — the first worker to
+ * open it is recorded. The write goes through the audit helpers like every
+ * other change, and the screen re-reads the handover afterwards, so the
+ * tracker shows "seen" only after Firestore confirms it.
+ */
+export async function markHandoverSeen(handover: Handover, worker: User): Promise<Handover> {
+  if (handover.status !== 'pending' || handover.seenAt) return handover;
+  if (handover.toVillage !== worker.village) return handover;
+  return updateDoc(
+    firestoreStore,
+    COLLECTIONS.handovers,
+    handover,
+    { seenAt: nowIso(), seenBy: worker.id },
+    { id: worker.id, role: worker.role },
+  );
 }
 
 /**

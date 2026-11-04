@@ -1,18 +1,22 @@
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
+import { TrackerProgress } from '../components/CareTracker';
+import { ConnectionNote } from '../components/ConnectionBadge';
 import { EmptyState, ErrorState, LoadingState } from '../components/StateBlock';
+import { RejectedChanges } from '../components/SyncStatus';
 import { StatusBadge } from '../components/StatusBadge';
 import { Card, Notice, SectionTitle } from '../components/ui';
 import { ChevronRightIcon, PlusIcon, UserIcon } from '../components/icons';
 import { useSession } from '../context/SessionContext';
 import { motherStatus, statusVillageId } from '../data/handover';
+import { buildCareTracker } from '../data/tracker';
 import { labelKeyFor, nextMilestone } from '../data/journey';
-import type { Handover, JourneyCard, Mother, User, Village } from '../data/model';
+import type { ConsentLogEntry, Handover, JourneyCard, Mother, User, Village } from '../data/model';
 import { useAsyncData } from '../hooks/useAsyncData';
-import { listAllHandovers } from '../services/handoverService';
-import { listAllMothers, listAllUsers, listJourneyCards, listVillages } from '../services/journeyService';
+import { useQueue } from '../hooks/useOffline';
 import { formatDate } from '../utils/date';
+import { loadWorkspace, type Workspace } from '../offline/repo';
 
 interface HomeData {
   villages: Village[];
@@ -22,66 +26,90 @@ interface HomeData {
   handovers: Handover[];
   cards: JourneyCard[];
   allMothers: Mother[];
+  consents: ConsentLogEntry[];
+  users: User[];
+}
+
+function buildHome(workspace: Workspace, worker: User | null): HomeData {
+  const names: Record<string, string> = Object.fromEntries(
+    workspace.users.map((user) => [user.id, user.name]),
+  );
+  for (const mother of workspace.mothers) names[mother.id] = mother.name;
+
+  if (!worker) {
+    return {
+      villages: workspace.villages,
+      names,
+      mothers: [],
+      incoming: [],
+      handovers: workspace.handovers,
+      cards: workspace.cards,
+      allMothers: workspace.mothers,
+      consents: workspace.consents,
+      users: workspace.users,
+    };
+  }
+
+  const homeMothers = workspace.mothers.filter((mother) => mother.village === worker.village);
+  const acceptedIds = workspace.handovers
+    .filter((handover) => handover.toVillage === worker.village && handover.status === 'accepted')
+    .map((handover) => handover.motherId);
+  const acceptedMothers = workspace.mothers.filter((mother) => acceptedIds.includes(mother.id));
+  const mine = [...homeMothers, ...acceptedMothers].filter(
+    (mother, index, list) => list.findIndex((item) => item.id === mother.id) === index,
+  );
+
+  return {
+    villages: workspace.villages,
+    names,
+    mothers: mine,
+    incoming: workspace.handovers.filter(
+      (handover) => handover.toVillage === worker.village && handover.status === 'pending',
+    ),
+    handovers: workspace.handovers,
+    cards: workspace.cards,
+    allMothers: workspace.mothers,
+    consents: workspace.consents,
+    users: workspace.users,
+  };
 }
 
 /**
- * ASHA / ANM home. Two sections from the same data layer:
+ * ASHA / ANM home. Two sections from the same cached snapshot:
  *  - Incoming mothers: pending handovers addressed to this village
  *  - My mothers: everyone in this village, plus anyone accepted into its care
+ *
+ * The snapshot is the one kept on the device, so this screen opens with no
+ * connection and shows any visit or milestone still waiting to sync.
  */
 export default function WorkerHome() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const { worker } = useSession();
+  const queue = useQueue();
   const role = worker?.role ?? 'asha';
   const base = `/${role}`;
 
   const { data, loading, error, reload } = useAsyncData<HomeData>(async () => {
-    const [villages, allMothers, handovers, cards, users] = await Promise.all([
-      listVillages(),
-      listAllMothers(),
-      listAllHandovers(),
-      listJourneyCards(),
-      listAllUsers(),
-    ]);
-    const names = Object.fromEntries(users.map((user: User) => [user.id, user.name]));
-
-    if (!worker) {
-      return { villages, names, mothers: [], incoming: [], handovers, cards, allMothers };
-    }
-
-    const homeMothers = allMothers.filter((mother) => mother.village === worker.village);
-    const acceptedIds = handovers
-      .filter((h) => h.toVillage === worker.village && h.status === 'accepted')
-      .map((h) => h.motherId);
-    const acceptedMothers = allMothers.filter((mother) => acceptedIds.includes(mother.id));
-    const mine = [...homeMothers, ...acceptedMothers].filter(
-      (mother, index, list) => list.findIndex((m) => m.id === mother.id) === index,
-    );
-
-    return {
-      villages,
-      names,
-      mothers: mine,
-      incoming: handovers.filter((h) => h.toVillage === worker.village && h.status === 'pending'),
-      handovers,
-      cards,
-      allMothers,
-    };
-  }, [worker?.id, worker?.village]);
+    const workspace = await loadWorkspace(queue.ops);
+    return buildHome(workspace, worker);
+  }, [worker?.id, worker?.village, queue.ops]);
 
   const villageName = (id: string) => data?.villages.find((village) => village.id === id)?.name ?? '';
   const cardsByMother = new Map((data?.cards ?? []).map((card) => [card.motherId, card]));
 
   return (
     <AppShell title={t('worker.title')} subtitle={t('worker.subtitle')}>
+      <ConnectionNote />
+      <RejectedChanges />
+
       {loading ? <LoadingState label={t('shared.loading')} /> : null}
       {error ? <ErrorState onRetry={reload} /> : null}
 
       {!loading && !error && data ? (
         <>
           {data.incoming.length > 0 ? (
-            <section className="mb-6">
+            <section className="mt-4 mb-6">
               <div className="flex items-center gap-2">
                 <SectionTitle>{t('worker.incomingTitle')}</SectionTitle>
                 <span className="inline-flex min-h-6 min-w-6 items-center justify-center rounded-full bg-red-600 px-2 text-sm font-bold text-white">
@@ -94,6 +122,13 @@ export default function WorkerHome() {
                 {data.incoming.map((handover) => {
                   const mother = data.allMothers.find((m) => m.id === handover.motherId);
                   if (!mother) return null;
+                  const tracked = buildCareTracker({
+                    mother,
+                    handovers: data.handovers,
+                    consents: data.consents,
+                    card: cardsByMother.get(mother.id) ?? null,
+                    users: data.users,
+                  });
                   return (
                     <li key={handover.id}>
                       <Link
@@ -116,6 +151,11 @@ export default function WorkerHome() {
                           <span className="mt-1 block text-sm font-bold text-amber-900">
                             {t('worker.pendingAccept')}
                           </span>
+                          <TrackerProgress
+                            done={tracked.doneCount}
+                            total={tracked.total}
+                            className="mt-1"
+                          />
                         </span>
                         <ChevronRightIcon className="h-6 w-6 shrink-0 text-amber-700" />
                       </Link>
@@ -126,7 +166,7 @@ export default function WorkerHome() {
             </section>
           ) : null}
 
-          <div className="flex items-baseline justify-between gap-2">
+          <div className="mt-4 flex items-baseline justify-between gap-2">
             <SectionTitle>
               {t('worker.myMothers', { village: villageName(worker?.village ?? '') })}
             </SectionTitle>
@@ -150,6 +190,15 @@ export default function WorkerHome() {
                 const next = nextMilestone(card);
                 const nextKey = next ? labelKeyFor(next) : null;
                 const status = motherStatus(mother, data.handovers);
+                const tracked = status.handover
+                  ? buildCareTracker({
+                      mother,
+                      handovers: data.handovers,
+                      consents: data.consents,
+                      card,
+                      users: data.users,
+                    })
+                  : null;
                 return (
                   <li key={mother.id}>
                     <Link
@@ -169,6 +218,13 @@ export default function WorkerHome() {
                             villageName={villageName(statusVillageId(status))}
                           />
                         </span>
+                        {tracked ? (
+                          <TrackerProgress
+                            done={tracked.doneCount}
+                            total={tracked.total}
+                            className="mt-1"
+                          />
+                        ) : null}
                         <span className="mt-1 block text-sm font-semibold text-brand-800">
                           {next ? (
                             <>

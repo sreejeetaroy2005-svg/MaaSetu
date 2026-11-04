@@ -1,19 +1,24 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AppShell } from '../components/AppShell';
+import { ConnectionNote } from '../components/ConnectionBadge';
 import { EmptyState, ErrorState, LoadingState } from '../components/StateBlock';
 import { StatusBadge } from '../components/StatusBadge';
+import { CareTracker } from '../components/CareTracker';
+import { QueuedNotice, RejectedChanges } from '../components/SyncStatus';
 import { Button, Card, Notice, SectionTitle } from '../components/ui';
 import { CheckIcon, ClockIcon, DashCircleIcon, ListIcon, UserIcon } from '../components/icons';
 import { useSession } from '../context/SessionContext';
 import { hasActiveHandover, motherStatus, statusVillageId } from '../data/handover';
+import { buildCareTracker } from '../data/tracker';
 import { doneMilestones, labelKeyFor, nextMilestone } from '../data/journey';
 import { MOTHER_MESSAGE_KEYS } from '../data/journeyTemplate';
 import type { ConsentLogEntry, Handover, JourneyCard, User, Village } from '../data/model';
 import { useAsyncData } from '../hooks/useAsyncData';
+import { useQueue } from '../hooks/useOffline';
 import { changeLanguage } from '../i18n';
-import { listAllHandovers, listConsentLogs, withdrawConsent } from '../services/handoverService';
-import { fetchJourneyCard, listAllUsers, listVillages } from '../services/journeyService';
+import { deviceAuthor, loadMotherCard, withdrawConsentOffline } from '../offline/repo';
+import { latestOpFor } from '../offline/queue';
 import { formatDate } from '../utils/date';
 
 interface MotherData {
@@ -28,10 +33,15 @@ interface MotherData {
  * The mother's own screen: read-only except for consent, which is hers to
  * withdraw. Shows her current village, current health worker and done/next
  * milestones — never advice or interpretation.
+ *
+ * With no connection her withdrawal is recorded on this phone and queued. Her
+ * record keeps being shared until it syncs, and the screen says so instead of
+ * claiming the withdrawal went through.
  */
 export default function MotherHome() {
   const { t, i18n } = useTranslation();
   const { mother, actor } = useSession();
+  const queue = useQueue();
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -40,24 +50,17 @@ export default function MotherHome() {
   const [languageSynced, setLanguageSynced] = useState(false);
 
   const { data, loading, error, reload } = useAsyncData<MotherData>(async () => {
-    const [villages, users, handovers] = await Promise.all([
-      listVillages(),
-      listAllUsers(),
-      listAllHandovers(),
-    ]);
-    if (!mother) return { villages, users, card: null, handovers: [], consents: [] };
-    const [card, consents] = await Promise.all([
-      fetchJourneyCard(mother.id),
-      listConsentLogs(mother.id),
-    ]);
+    if (!mother) return { villages: [], users: [], card: null, handovers: [], consents: [] };
+    const bundle = await loadMotherCard(mother.id, queue.ops);
+    if (!bundle) return { villages: [], users: [], card: null, handovers: [], consents: [] };
     return {
-      villages,
-      users,
-      card,
-      handovers: handovers.filter((h) => h.motherId === mother.id),
-      consents,
+      villages: bundle.villages,
+      users: bundle.users,
+      card: bundle.card,
+      handovers: bundle.handovers,
+      consents: bundle.consents,
     };
-  }, [mother?.id]);
+  }, [mother?.id, queue.ops]);
 
   // Her screen opens in her own language, once.
   useEffect(() => {
@@ -78,14 +81,72 @@ export default function MotherHome() {
   const done = card ? doneMilestones(card) : [];
   const next = nextMilestone(card);
 
+  /** A withdrawal still on this phone (never shown as sent). */
+  const queuedWithdraw = mother
+    ? latestOpFor(queue.ops, ['consent.withdraw'], mother.id)
+    : undefined;
+  const withdrawPending =
+    queuedWithdraw !== undefined &&
+    (queuedWithdraw.status === 'waiting' ||
+      queuedWithdraw.status === 'syncing' ||
+      queuedWithdraw.status === 'failed');
+
+  const userNames: Record<string, string> = Object.fromEntries(
+    (data?.users ?? []).map((user) => [user.id, user.name]),
+  );
+  if (mother) userNames[mother.id] = mother.name;
+  const villageNames: Record<string, string> = Object.fromEntries(
+    (data?.villages ?? []).map((village) => [village.id, village.name]),
+  );
+
+  /** A handover still queued on this phone: the tracker shows it as not sent. */
+  const queuedStartOp = mother ? latestOpFor(queue.ops, ['handover.start'], mother.id) : undefined;
+  const queuedStart =
+    queuedStartOp &&
+    (queuedStartOp.status === 'waiting' ||
+      queuedStartOp.status === 'syncing' ||
+      queuedStartOp.status === 'failed')
+      ? queuedStartOp
+      : undefined;
+
+  const tracker =
+    mother && (handover || queuedStart)
+      ? buildCareTracker({
+          mother,
+          handovers,
+          consents,
+          card,
+          users: data?.users ?? [],
+          queued: {
+            startAt: queuedStart?.enteredAt ?? null,
+            startById: queuedStart?.author.id ?? null,
+            startToVillage: (queuedStart?.payload.toVillageId as string | undefined) ?? null,
+            startToWorker: (queuedStart?.payload.toWorkerId as string | undefined) ?? null,
+            withdrawAt: withdrawPending ? queuedWithdraw.enteredAt : null,
+          },
+        })
+      : null;
+  const currentWorkerPhone =
+    data?.users.find((user) => user.id === status?.currentWorkerId)?.phone ?? null;
+
   const withdraw = async () => {
     if (!mother || !handover || !activeConsent) return;
     setBusy(true);
     setActionError(false);
     try {
-      await withdrawConsent(mother, handover, activeConsent, actor ?? { id: mother.id, role: 'mother' });
+      const outcome = await withdrawConsentOffline(
+        mother,
+        handover,
+        activeConsent,
+        actor ?? { id: mother.id, role: 'mother' },
+        deviceAuthor(actor ?? { id: mother.id, role: 'mother' }, mother.name),
+      );
       setConfirmOpen(false);
-      setWithdrawnNow(true);
+      if (outcome.queued) {
+        setWithdrawnNow(false);
+      } else {
+        setWithdrawnNow(true);
+      }
       reload();
     } catch (caught) {
       console.error('MaaSetu: withdraw consent failed', caught);
@@ -97,6 +158,9 @@ export default function MotherHome() {
 
   return (
     <AppShell title={t('mother.title')} subtitle={t('mother.subtitle')}>
+      <ConnectionNote />
+      <RejectedChanges />
+
       {loading ? <LoadingState label={t('shared.loading')} /> : null}
       {error ? <ErrorState onRetry={reload} /> : null}
 
@@ -110,7 +174,7 @@ export default function MotherHome() {
 
       {!loading && !error && mother && status ? (
         <>
-          <Card>
+          <Card className="mt-4">
             <StatusBadge status={status} villageName={villageName(statusVillageId(status))} />
 
             <dl className="mt-4 space-y-3">
@@ -146,6 +210,25 @@ export default function MotherHome() {
               {t(MOTHER_MESSAGE_KEYS.intro)}
             </p>
           </Card>
+
+          <CareTracker
+            loading={loading}
+            tracker={tracker}
+            names={userNames}
+            villages={villageNames}
+            language={i18n.language}
+            audience="mother"
+            workerPhone={currentWorkerPhone}
+            onRefresh={reload}
+            refreshing={loading}
+          />
+
+          {withdrawPending ? (
+            <QueuedNotice
+              title={t('offline.notSentYet')}
+              body={t('offline.withdrawQueuedBody')}
+            />
+          ) : null}
 
           {card === null ? (
             <div className="mt-6">
@@ -228,7 +311,7 @@ export default function MotherHome() {
             </>
           )}
 
-          {handover && activeConsent && hasActiveHandover(status) ? (
+          {handover && activeConsent && hasActiveHandover(status) && !withdrawPending ? (
             <Card className="mt-8">
               <SectionTitle>{t('mother.consentTitle')}</SectionTitle>
               <p className="mt-1 text-base leading-relaxed text-slate-700">
@@ -277,7 +360,8 @@ export default function MotherHome() {
 
           {withdrawnNow || status.kind === 'consentWithdrawn' ? (
             <Notice tone="warn" className="mt-6">
-              {t('mother.withdrawnTitle')} {t('mother.withdrawnBody', { village: villageName(status.currentVillageId) })}
+              {t('mother.withdrawnTitle')}{' '}
+              {t('mother.withdrawnBody', { village: villageName(status.currentVillageId) })}
             </Notice>
           ) : null}
 

@@ -22,9 +22,21 @@
     font-size: 17px;
   }
 
+  /* The page background fills the whole window; content sits in one centred
+     column of at most 480px, so wide screens show calm neutral space. */
+  html,
+  body {
+    min-height: 100%;
+  }
+
   body {
     @apply bg-slate-50 text-slate-900 antialiased;
     -webkit-text-size-adjust: 100%;
+    overflow-x: hidden;
+  }
+
+  #root {
+    min-height: 100dvh;
   }
 
   /* Never shrink text below the user's OS font-size setting. */

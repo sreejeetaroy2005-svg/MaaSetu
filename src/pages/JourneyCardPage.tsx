@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ActivityList } from '../components/ActivityList';
@@ -7,11 +7,18 @@ import { MilestoneItem, type MilestonePanel } from '../components/MilestoneItem'
 import { EmptyState, ErrorState, LoadingState, PlaceholderNote } from '../components/StateBlock';
 import { StatusBadge } from '../components/StatusBadge';
 import { VisitItem } from '../components/VisitItem';
-import { ArrowRightIcon, ListIcon, LockIcon, PlusIcon } from '../components/icons';
+import { ArrowRightIcon, ListIcon, LockIcon, PlusIcon, QrIcon, SmsIcon } from '../components/icons';
+import { ConnectionNote } from '../components/ConnectionBadge';
+import { CareTracker } from '../components/CareTracker';
+import { ConflictsPanel } from '../components/ConflictsPanel';
+import { QueuedNotice, SyncChip } from '../components/SyncStatus';
+import { Notice } from '../components/ui';
 import { useSession } from '../context/SessionContext';
 import { accessFor, motherStatus, statusVillageId } from '../data/handover';
+import { buildCareTracker } from '../data/tracker';
 import type {
   ConsentLogEntry,
+  ConflictRecord,
   Handover,
   JourneyCard,
   MilestoneStatus,
@@ -20,17 +27,18 @@ import type {
   Village,
 } from '../data/model';
 import { useAsyncData } from '../hooks/useAsyncData';
-import { acceptHandover, listAllHandovers, listConsentLogs } from '../services/handoverService';
+import { useNetwork, useQueue } from '../hooks/useOffline';
 import {
-  addVisit,
-  editVisit,
-  fetchJourneyCard,
-  fetchMother,
-  listAllUsers,
-  listVillages,
-  saveMilestoneDueDate,
-  saveMilestoneStatus,
-} from '../services/journeyService';
+  acceptHandoverOffline,
+  correctVisit,
+  deviceAuthor,
+  loadMotherCard,
+  recordVisit,
+  setMilestoneDueDate,
+  setMilestoneStatus,
+} from '../offline/repo';
+import { latestOpFor, syncStateFor } from '../offline/queue';
+import { markHandoverSeen } from '../services/handoverService';
 import { formatDate, formatMonth, todayIso } from '../utils/date';
 
 interface CardData {
@@ -40,6 +48,7 @@ interface CardData {
   villages: Village[];
   handovers: Handover[];
   consents: ConsentLogEntry[];
+  conflicts: ConflictRecord[];
 }
 
 /**
@@ -58,26 +67,22 @@ export default function JourneyCardPage() {
   const base = `/${role}`;
   const actor = sessionActor ?? { id: signedInWorker?.id ?? '', role };
 
+  const queue = useQueue();
+  const network = useNetwork();
   const { data, loading, error, reload } = useAsyncData<CardData | null>(async () => {
     if (!motherId) return null;
-    const [mother, card, users, villages, handovers, consents] = await Promise.all([
-      fetchMother(motherId),
-      fetchJourneyCard(motherId),
-      listAllUsers(),
-      listVillages(),
-      listAllHandovers(),
-      listConsentLogs(motherId),
-    ]);
-    if (!mother) return null;
+    const bundle = await loadMotherCard(motherId, queue.ops);
+    if (!bundle) return null;
     return {
-      mother,
-      card,
-      users,
-      villages,
-      handovers: handovers.filter((h) => h.motherId === mother.id),
-      consents,
+      mother: bundle.mother,
+      card: bundle.card,
+      users: bundle.users,
+      villages: bundle.villages,
+      handovers: bundle.handovers,
+      consents: bundle.consents,
+      conflicts: bundle.conflicts,
     };
-  }, [motherId]);
+  }, [motherId, queue.ops]);
 
   const [card, setCard] = useState<JourneyCard | null>(null);
   const [busy, setBusy] = useState(false);
@@ -97,12 +102,16 @@ export default function JourneyCardPage() {
   const names: Record<string, string> = Object.fromEntries(
     (data?.users ?? []).map((user) => [user.id, user.name]),
   );
+  // Her own id resolves to her name in the tracker ("withdrawn by ...").
+  if (data) names[data.mother.id] = data.mother.name;
   const villageNames: Record<string, string> = Object.fromEntries(
     (data?.villages ?? []).map((village) => [village.id, village.name]),
   );
   const villageName = (id: string) => villageNames[id] ?? '';
 
   const viewer = data?.users.find((user) => user.id === actor.id) ?? null;
+  /** Device author: her name is kept with the change on this phone. */
+  const author = deviceAuthor(actor, viewer?.name ?? signedInWorker?.name ?? '');
   const status = data ? motherStatus(data.mother, data.handovers) : null;
   const access = data ? accessFor(viewer, data.mother, data.handovers) : 'blocked';
   const handover = status?.handover ?? null;
@@ -113,12 +122,76 @@ export default function JourneyCardPage() {
   const canStartHandover =
     canEdit && status !== null && (status.kind === 'atHome' || status.kind === 'consentWithdrawn');
 
-  const runWrite = async (work: () => Promise<JourneyCard>) => {
+  /** Handover steps still queued on this phone: shown as "not sent yet". */
+  const queuedStartOp = data ? latestOpFor(queue.ops, ['handover.start'], data.mother.id) : undefined;
+  const queuedStart =
+    queuedStartOp &&
+    (queuedStartOp.status === 'waiting' ||
+      queuedStartOp.status === 'syncing' ||
+      queuedStartOp.status === 'failed')
+      ? queuedStartOp
+      : undefined;
+  const queuedWithdrawOp = data
+    ? latestOpFor(queue.ops, ['consent.withdraw'], data.mother.id)
+    : undefined;
+  const queuedWithdraw =
+    queuedWithdrawOp &&
+    (queuedWithdrawOp.status === 'waiting' ||
+      queuedWithdrawOp.status === 'syncing' ||
+      queuedWithdrawOp.status === 'failed')
+      ? queuedWithdrawOp
+      : undefined;
+
+  const tracker =
+    data && (handover || queuedStart)
+      ? buildCareTracker({
+          mother: data.mother,
+          handovers: data.handovers,
+          consents: data.consents,
+          card,
+          users: data.users,
+          queued: {
+            startAt: queuedStart?.enteredAt ?? null,
+            startById: queuedStart?.author.id ?? null,
+            startToVillage: (queuedStart?.payload.toVillageId as string | undefined) ?? null,
+            startToWorker: (queuedStart?.payload.toWorkerId as string | undefined) ?? null,
+            withdrawAt: queuedWithdraw?.enteredAt ?? null,
+          },
+        })
+      : null;
+
+  /**
+   * The receiving worker opening her summary marks it as seen: once, only in
+   * the receiving village, and only after the write reaches the server, so the
+   * tracker cannot show a step the server does not know about.
+   */
+  const seenMarked = useRef<string | null>(null);
+  useEffect(() => {
+    seenMarked.current = null;
+  }, [motherId]);
+  useEffect(() => {
+    const target = status?.handover ?? null;
+    if (!target || !viewer || target.seenAt || target.status !== 'pending') return;
+    if (target.toVillage !== viewer.village) return;
+    if (network.status === 'offline') return;
+    if (seenMarked.current === target.id) return;
+    seenMarked.current = target.id;
+    void markHandoverSeen(target, viewer)
+      .then((next) => {
+        if (next.seenAt) reload();
+      })
+      .catch((caught: unknown) => {
+        console.warn('MaaSetu: could not record that the summary was seen', caught);
+      });
+  }, [status?.handover, viewer, network.status, reload]);
+
+  const runWrite = async (work: () => Promise<{ value: JourneyCard; queued: boolean }>) => {
     if (!card || !canEdit) return;
     setBusy(true);
     setSaveError(false);
     try {
-      setCard(await work());
+      const outcome = await work();
+      setCard(outcome.value);
       setPanel(null);
       setEditingVisit(null);
       setVisitFormOpen(false);
@@ -136,7 +209,7 @@ export default function JourneyCardPage() {
     setBusy(true);
     setSaveError(false);
     try {
-      await acceptHandover(handover, viewer, actor);
+      await acceptHandoverOffline(handover, viewer, actor, author);
       reload();
     } catch (caught) {
       console.error('MaaSetu: accept failed', caught);
@@ -149,19 +222,43 @@ export default function JourneyCardPage() {
   const changeStatus =
     (templateId: string) => (next: MilestoneStatus, doneDate: string | null) => {
       if (!card) return;
-      void runWrite(() => saveMilestoneStatus(card, templateId, next, doneDate, actor));
+      void runWrite(() => setMilestoneStatus(card, templateId, next, doneDate, actor, author));
     };
 
   const changeDueDate = (templateId: string) => (dueDate: string | null) => {
     if (!card) return;
-    void runWrite(() => saveMilestoneDueDate(card, templateId, dueDate, actor));
+    void runWrite(() => setMilestoneDueDate(card, templateId, dueDate, actor, author));
   };
 
   const submitVisit = (event: FormEvent) => {
     event.preventDefault();
     if (!card || !visitDate || visitNote.trim().length === 0) return;
-    void runWrite(() => addVisit(card, { date: visitDate, note: visitNote }, actor));
+    void runWrite(() => recordVisit(card, { date: visitDate, note: visitNote }, actor, author));
   };
+
+  /** A handover change still sitting on this phone (never shown as sent). */
+  const handoverOp = latestOpFor(
+    queue.ops,
+    ['handover.start', 'handover.accept', 'consent.withdraw'],
+    data?.mother.id ?? motherId ?? '',
+  );
+  const handoverQueued =
+    handoverOp !== undefined &&
+    (handoverOp.status === 'waiting' ||
+      handoverOp.status === 'syncing' ||
+      handoverOp.status === 'failed');
+  const queuedTitle =
+    handoverOp?.kind === 'handover.accept'
+      ? t('offline.acceptQueuedTitle')
+      : handoverOp?.kind === 'consent.withdraw'
+        ? t('offline.withdrawQueuedTitle')
+        : t('offline.startQueuedTitle');
+  const queuedBody =
+    handoverOp?.kind === 'handover.accept'
+      ? t('offline.acceptQueuedBody')
+      : handoverOp?.kind === 'consent.withdraw'
+        ? t('offline.withdrawQueuedBody')
+        : t('offline.startQueuedBody');
 
   return (
     <AppShell backTo={base} title={t('journey.title')} subtitle={data?.mother.name}>
@@ -195,7 +292,20 @@ export default function JourneyCardPage() {
 
       {!loading && !error && data && access !== 'blocked' && status ? (
         <>
-          <section className="rounded-3xl border-2 border-brand-100 bg-white p-4">
+          <ConnectionNote />
+
+          <CareTracker
+            loading={loading}
+            tracker={tracker}
+            names={names}
+            villages={villageNames}
+            language={i18n.language}
+            audience="worker"
+            onRefresh={reload}
+            refreshing={loading}
+          />
+
+          <section className="mt-3 rounded-3xl border-2 border-brand-100 bg-white p-4">
             <StatusBadge status={status} villageName={villageName(statusVillageId(status))} />
             <dl className="mt-4 space-y-3 border-t border-slate-200 pt-4">
               <div>
@@ -244,12 +354,34 @@ export default function JourneyCardPage() {
                 {t('handover.movingButton')}
               </button>
             ) : null}
+
+            <Link
+              to={`/${role}/mothers/${data.mother.id}/qr`}
+              className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border-2 border-slate-300 bg-white px-3 text-sm font-bold text-slate-800"
+            >
+              <QrIcon className="h-4 w-4" />
+              {t('qr.offlineShare')}
+            </Link>
           </section>
 
           {saveError ? (
             <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-sm font-semibold text-red-800">
               {t('journey.saveError')}
             </p>
+          ) : null}
+
+          {handoverQueued ? <QueuedNotice title={queuedTitle} body={queuedBody} /> : null}
+          {handoverOp?.status === 'rejected' ? (
+            <Notice tone="error" className="mt-3">
+              <strong>
+                {handoverOp.rejectedReason === 'consent_withdrawn'
+                  ? t('offline.rejectedAcceptTitle')
+                  : t('offline.rejectedHandoverTitle')}
+              </strong>{' '}
+              {handoverOp.rejectedReason === 'consent_withdrawn'
+                ? t('offline.rejectedAcceptBody')
+                : t('offline.rejectedHandoverBody')}
+            </Notice>
           ) : null}
 
           {status.kind === 'movingPending' && handover ? (
@@ -276,7 +408,15 @@ export default function JourneyCardPage() {
                 >
                   {busy ? t('shared.saving') : t('journey.acceptButton')}
                 </button>
-              ) : null}
+              ) : (
+                <Link
+                  to={`/sms-preview?mother=${data.mother.id}`}
+                  className="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border-2 border-amber-700 bg-white px-3 text-sm font-bold text-amber-900"
+                >
+                  <SmsIcon className="h-4 w-4" />
+                  {t('offline.smsOpen')}
+                </Link>
+              )}
             </section>
           ) : null}
 
@@ -308,6 +448,12 @@ export default function JourneyCardPage() {
               </p>
             </section>
           ) : null}
+
+          <ConflictsPanel
+            conflicts={data.conflicts}
+            names={names}
+            language={i18n.language}
+          />
 
           <section className="mt-6">
             <div className="flex items-baseline justify-between gap-2">
@@ -345,6 +491,14 @@ export default function JourneyCardPage() {
                     }
                     onStatus={changeStatus(milestone.templateId)}
                     onDueDate={changeDueDate(milestone.templateId)}
+                    badge={
+                      <SyncChip
+                        state={syncStateFor(queue.ops, {
+                          kind: ['milestone.status', 'milestone.dueDate'],
+                          recordId: milestone.templateId,
+                        })}
+                      />
+                    }
                   />
                 ))}
               </ul>
@@ -436,7 +590,17 @@ export default function JourneyCardPage() {
                     readOnly={!canEdit}
                     onStartEdit={() => setEditingVisit(visit.id)}
                     onCancel={() => setEditingVisit(null)}
-                    onSave={(input) => void runWrite(() => editVisit(card, visit.id, input, actor))}
+                    badge={
+                      <SyncChip
+                        state={syncStateFor(queue.ops, {
+                          kind: ['visit.add', 'visit.edit'],
+                          recordId: visit.id,
+                        })}
+                      />
+                    }
+                    onSave={(input) =>
+                      void runWrite(() => correctVisit(card, visit.id, input, actor, author))
+                    }
                   />
                 ))}
               </ul>

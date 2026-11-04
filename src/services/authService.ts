@@ -20,7 +20,7 @@
  */
 import { PhoneAuthProvider, signInWithCredential, signOut as firebaseSignOut, type User as FirebaseUser } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore';
-import { auth, db } from './firebase';
+import { auth, db, usingEmulators } from './firebase';
 import type { Mother, User } from '../data/model';
 
 export const DEMO_OTP = '123456';
@@ -110,7 +110,7 @@ export async function latestEmulatorCode(phone: string): Promise<string | null> 
 
 /** Start phone sign-in: sends a code and returns the challenge to complete. */
 export async function sendOtp(phone: string): Promise<OtpChallenge> {
-  if (!import.meta.env.DEV) {
+  if (!usingEmulators) {
     // Production swap point: signInWithPhoneNumber(auth, normalizePhone(phone), verifier)
     throw new Error('MaaSetu: phone sign-in is wired to the Auth emulator only');
   }
@@ -130,14 +130,14 @@ export async function confirmOtp(challenge: OtpChallenge, code: string): Promise
  * build, and it grants nothing beyond the profile already in Firestore.
  */
 export function startDemoSession(phone: string, code: string): boolean {
-  if (!import.meta.env.DEV) return false;
+  if (!usingEmulators) return false;
   if (code.trim() !== DEMO_OTP) return false;
   sessionStorage.setItem(DEMO_SESSION_KEY, normalizePhone(phone));
   return true;
 }
 
 export function readDemoSession(): string | null {
-  if (!import.meta.env.DEV) return null;
+  if (!usingEmulators) return null;
   return sessionStorage.getItem(DEMO_SESSION_KEY);
 }
 

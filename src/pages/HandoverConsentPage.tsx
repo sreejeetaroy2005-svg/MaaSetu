@@ -2,14 +2,16 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AppShell } from '../components/AppShell';
+import { ConnectionNote } from '../components/ConnectionBadge';
 import { EmptyState, ErrorState, LoadingState, PlaceholderNote } from '../components/StateBlock';
+import { Notice } from '../components/ui';
 import { CheckIcon, LockIcon, UserIcon } from '../components/icons';
 import { useSession } from '../context/SessionContext';
 import { motherStatus } from '../data/handover';
 import type { Handover, Mother, User, Village } from '../data/model';
 import { useAsyncData } from '../hooks/useAsyncData';
-import { listAllHandovers, startHandover } from '../services/handoverService';
-import { fetchMother, listAllUsers, listVillages } from '../services/journeyService';
+import { useNetwork, useQueue } from '../hooks/useOffline';
+import { beginHandover, deviceAuthor, loadMotherCard } from '../offline/repo';
 import { formatDate, todayIso } from '../utils/date';
 
 interface ConsentData {
@@ -25,33 +27,35 @@ interface ConsentData {
  * Step 3–5 of the flow: choose where the mother is moving, show exactly what
  * will be shared, record her consent (checkbox + timestamp + who recorded it),
  * then create the pending handover. No consent → no handover, no data access.
+ *
+ * With no connection the consent is recorded on this phone and queued: the
+ * receiving worker hears nothing until it syncs, and the screen never claims it
+ * was sent.
  */
 export default function HandoverConsentPage() {
   const { motherId } = useParams<{ motherId: string }>();
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const { worker: signedInWorker, actor: sessionActor } = useSession();
+  const queue = useQueue();
+  const network = useNetwork();
   const role = signedInWorker?.role ?? 'asha';
   const base = `/${role}`;
   const actor = sessionActor ?? { id: signedInWorker?.id ?? '', role };
+  const author = deviceAuthor(actor, signedInWorker?.name ?? '');
 
   const { data, loading, error, reload } = useAsyncData<ConsentData | null>(async () => {
     if (!motherId) return null;
-    const [mother, villages, users, handovers] = await Promise.all([
-      fetchMother(motherId),
-      listVillages(),
-      listAllUsers(),
-      listAllHandovers(),
-    ]);
-    if (!mother) return null;
+    const bundle = await loadMotherCard(motherId, queue.ops);
+    if (!bundle) return null;
     return {
-      mother,
-      villages,
-      users,
-      handovers: handovers.filter((h) => h.motherId === mother.id),
+      mother: bundle.mother,
+      villages: bundle.villages,
+      users: bundle.users,
+      handovers: bundle.handovers,
       fromWorker: signedInWorker,
     };
-  }, [motherId, signedInWorker?.id]);
+  }, [motherId, signedInWorker?.id, queue.ops]);
 
   const [toVillageId, setToVillageId] = useState('');
   const [toWorkerId, setToWorkerId] = useState('');
@@ -104,16 +108,18 @@ export default function HandoverConsentPage() {
 
     setSaving(true);
     try {
-      await startHandover(
+      await beginHandover(
         {
           mother: data.mother,
           fromWorker: data.fromWorker,
           toVillageId,
           toWorkerId,
-          consentGranted: consentGiven,
         },
         actor,
+        author,
       );
+      // Offline this only reached the queue; her card says "Not sent yet"
+      // until the change is confirmed by the server.
       void navigate(`${base}/mothers/${data.mother.id}`, { replace: true });
     } catch (caught) {
       console.error('MaaSetu: handover failed', caught);
@@ -129,6 +135,8 @@ export default function HandoverConsentPage() {
       title={t('handover.title')}
       subtitle={data?.mother.name}
     >
+      <ConnectionNote />
+
       {loading ? <LoadingState label={t('shared.loading')} /> : null}
       {error ? <ErrorState onRetry={reload} /> : null}
 
@@ -150,7 +158,7 @@ export default function HandoverConsentPage() {
 
       {!loading && !error && data ? (
         <>
-          <section className="rounded-3xl border-2 border-brand-100 bg-white p-4">
+          <section className="mt-4 rounded-3xl border-2 border-brand-100 bg-white p-4">
             <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
               {t('handover.motherLabel')}
             </p>
@@ -173,6 +181,10 @@ export default function HandoverConsentPage() {
             </section>
           ) : (
             <form onSubmit={(event) => void submit(event)} className="mt-4 space-y-4">
+              {network.status === 'offline' ? (
+                <Notice tone="warn">{t('offline.startQueuedBody')}</Notice>
+              ) : null}
+
               <div>
                 <label htmlFor="to-village" className="block text-base font-semibold text-slate-800">
                   {t('handover.destinationLabel')}

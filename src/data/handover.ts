@@ -20,12 +20,23 @@ export interface MotherStatus {
   handover: Handover | null;
 }
 
-/** Most recent handover for a mother (by creation time). */
+/**
+ * The handover that describes where she is now: an active one (pending or
+ * accepted) if any exists, otherwise the most recent — a revoked one, which is
+ * what her tracker shows as stopped.
+ *
+ * Creation time alone is not enough: a live request can carry an older
+ * timestamp than a handover that has since been closed. Picking the closed one
+ * would hide the move that is actually happening.
+ */
 export function latestHandover(handovers: Handover[], motherId: string): Handover | null {
-  const mine = handovers
-    .filter((h) => h.motherId === motherId)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  return mine[0] ?? null;
+  const mine = handovers.filter((h) => h.motherId === motherId);
+  const byNewest = (a: Handover, b: Handover) => b.createdAt.localeCompare(a.createdAt);
+  const active = mine.filter(
+    (handover) => handover.status === 'pending' || handover.status === 'accepted',
+  );
+  if (active.length > 0) return [...active].sort(byNewest)[0];
+  return [...mine].sort(byNewest)[0] ?? null;
 }
 
 /**

@@ -26,6 +26,12 @@ import {
   type Profile,
 } from '../services/authService';
 import { auth } from '../services/firebase';
+import {
+  cacheProfile,
+  clearCachedProfile,
+  loadCachedProfile,
+  prepareOfflineData,
+} from '../offline/repo';
 import type { Actor } from '../services/audit';
 import type { Mother, Role, User } from '../data/model';
 
@@ -67,20 +73,31 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
       setStatus('loading');
       resolveProfile(phone)
-        .then((next) => {
+        .then(async (next) => {
           if (cancelled) return;
           // A verified phone that matches no record: drop the Auth session so
           // the person can correct the number instead of holding a stray login.
           if (!next && firebaseUser) void signOutUser();
           setProfile(next);
           setStatus(next ? 'signedIn' : 'signedOut');
+          if (!next) return;
+          // Keep who signed in on this phone, then warm the data every screen
+          // needs so the next launch works with no connection.
+          await cacheProfile(
+            phone,
+            next.kind === 'worker'
+              ? { kind: 'worker', id: next.worker.id }
+              : { kind: 'mother', id: next.mother.id },
+          );
+          void prepareOfflineData(next.kind === 'worker' ? next.worker.id : null);
         })
-        .catch((error: unknown) => {
+        .catch(async (error: unknown) => {
           console.error('MaaSetu: could not load the signed-in profile', error);
-          if (!cancelled) {
-            setProfile(null);
-            setStatus('signedOut');
-          }
+          // Offline start: fall back to the profile copy kept on this device.
+          const cached = await loadCachedProfile(phone).catch(() => null);
+          if (cancelled) return;
+          setProfile(cached);
+          setStatus(cached ? 'signedIn' : 'signedOut');
         });
     });
 
@@ -92,6 +109,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     await signOutUser();
+    // The cached profile is what lets an offline launch open her screens, so it
+    // is removed when she logs out of a shared phone.
+    await clearCachedProfile().catch(() => undefined);
     setProfile(null);
     setStatus('signedOut');
   }, []);

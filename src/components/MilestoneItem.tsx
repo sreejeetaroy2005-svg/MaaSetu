@@ -17,6 +17,8 @@ interface MilestoneItemProps {
   onOpenPanel: (panel: MilestonePanel) => void;
   onStatus: (status: MilestoneStatus, doneDate: string | null) => void;
   onDueDate: (dueDate: string | null) => void;
+  /** "Waiting to sync" / "Synced" for this record, when it is queued. */
+  badge?: ReactNode;
 }
 
 function RowButton({
@@ -54,6 +56,7 @@ export function MilestoneItem({
   onOpenPanel,
   onStatus,
   onDueDate,
+  badge,
 }: MilestoneItemProps) {
   const { t } = useTranslation();
   const [doneDate, setDoneDate] = useState(todayIso());
@@ -202,6 +205,8 @@ export function MilestoneItem({
           </div>
         </div>
       ) : null}
+
+      {badge ? <div className="mt-2 flex justify-end">{badge}</div> : null}
     </li>
   );
 }

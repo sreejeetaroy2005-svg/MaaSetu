@@ -17,7 +17,15 @@ import {
   getAuth,
   setPersistence,
 } from 'firebase/auth';
-import { connectFirestoreEmulator, doc, getFirestore, setDoc } from 'firebase/firestore';
+import {
+  connectFirestoreEmulator,
+  doc,
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  setDoc,
+} from 'firebase/firestore';
 import type { AuditStore } from './audit';
 
 const firebaseConfig = {
@@ -30,10 +38,35 @@ const firebaseConfig = {
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
-export const db = getFirestore(app);
 
-/** Emulator mode: dev builds only. */
-export const usingEmulators: boolean = import.meta.env.DEV;
+/**
+ * Firestore keeps an IndexedDB copy of every document this app has read, and
+ * shares it across tabs, so a refresh with no connection still opens on the
+ * data this phone already had. Writes queued by our own outbox carry the
+ * who/when the app needs, so this layer is only the cache.
+ */
+function createFirestore() {
+  try {
+    return initializeFirestore(app, {
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    });
+  } catch (error) {
+    console.warn('MaaSetu: persistent cache unavailable, using memory cache', error);
+    return getFirestore(app);
+  }
+}
+
+export const db = createFirestore();
+
+/**
+ * Emulator mode.
+ *
+ * Chosen by an empty `VITE_FIREBASE_API_KEY`: with no live project configured
+ * the app talks to the local Emulator Suite, including in a preview build, so
+ * offline behaviour can be exercised against real data. Set the key (and the
+ * other VITE_ variables) to point at a hosted project instead.
+ */
+export const usingEmulators: boolean = !import.meta.env.VITE_FIREBASE_API_KEY;
 
 if (usingEmulators) {
   connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });

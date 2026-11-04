@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Visit } from '../data/model';
 import type { VisitInput } from '../services/journeyService';
@@ -17,6 +17,8 @@ interface VisitItemProps {
   onStartEdit: () => void;
   onCancel: () => void;
   onSave: (input: VisitInput) => void;
+  /** "Waiting to sync" / "Synced" for this visit, when it is queued. */
+  badge?: ReactNode;
 }
 
 /**
@@ -34,6 +36,7 @@ export function VisitItem({
   onStartEdit,
   onCancel,
   onSave,
+  badge,
 }: VisitItemProps) {
   const { t } = useTranslation();
   const [date, setDate] = useState(visit.date);
@@ -142,6 +145,8 @@ export function VisitItem({
           </ul>
         </details>
       ) : null}
+
+      {badge ? <div className="mt-2 flex justify-end">{badge}</div> : null}
     </li>
   );
 }

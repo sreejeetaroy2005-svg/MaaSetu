@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { Village } from '../data/model';
-import { listVillages } from '../services/journeyService';
+import { loadWorkspace } from '../offline/repo';
 
 let cache: Village[] | null = null;
 
-/** Villages are tiny and static in the prototype: read them once per tab. */
+/** Villages are tiny and static: one cached read per tab, online or not. */
 export function useVillages(): Village[] {
   const [villages, setVillages] = useState<Village[]>(cache ?? []);
 
@@ -14,10 +14,10 @@ export function useVillages(): Village[] {
       return;
     }
     let cancelled = false;
-    listVillages()
-      .then((next) => {
-        cache = next;
-        if (!cancelled) setVillages(next);
+    loadWorkspace()
+      .then((workspace) => {
+        cache = workspace.villages;
+        if (!cancelled) setVillages(workspace.villages);
       })
       .catch((error: unknown) => {
         console.error('MaaSetu: could not load villages', error);

@@ -9,7 +9,10 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // "prompt": a new build waits until the person chooses to reload, so a
+      // half-entered visit is never thrown away by an update.
+      registerType: 'prompt',
+      injectRegister: null,
       includeAssets: ['icons/icon.svg'],
       manifest: {
         name: 'MaaSetu — Her care travels with her',
@@ -31,7 +34,14 @@ export default defineConfig({
         ],
       },
       workbox: {
+        // Every screen, chunk and asset is precached, so the app opens fully
+        // offline after one visit. `/ping.txt` is deliberately left out: the
+        // connection probe must hit the network, not the cache.
         globPatterns: ['**/*.{js,css,html,svg,png,ico,webmanifest}'],
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [/^\/ping\.txt/],
+        cleanupOutdatedCaches: true,
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
     }),
   ],

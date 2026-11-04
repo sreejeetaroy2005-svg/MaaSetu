@@ -4,13 +4,17 @@ import { EntryShell } from '../components/EntryShell';
 import { ArrowRightIcon, HeartIcon } from '../components/icons';
 import { buttonClass } from '../components/ui';
 
-/** First screen on every start: name, tagline, language and one way forward. */
+/**
+ * First screen on every start: name, tagline, language and one way forward.
+ * The block is centred in the available height, with the action and its note
+ * kept together just below it.
+ */
 export default function WelcomeScreen() {
   const { t } = useTranslation();
 
   return (
-    <EntryShell>
-      <div className="flex flex-col items-start">
+    <EntryShell center>
+      <div className="flex flex-1 flex-col items-center justify-center text-center">
         <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-brand-700 text-white">
           <HeartIcon className="h-9 w-9" />
         </span>
@@ -21,10 +25,12 @@ export default function WelcomeScreen() {
         <p className="mt-1 text-xl leading-snug font-semibold text-brand-800">
           {t('app.tagline')}
         </p>
-        <p className="mt-4 text-base leading-relaxed text-slate-700">{t('welcome.explanation')}</p>
+        <p className="mt-4 max-w-[26rem] text-base leading-relaxed text-slate-700">
+          {t('welcome.explanation')}
+        </p>
       </div>
 
-      <Link to="/start" className={buttonClass('primary', 'mt-8 w-full min-h-14 text-lg')}>
+      <Link to="/start" className={buttonClass('primary', 'mt-6 w-full min-h-14 text-lg')}>
         {t('welcome.start')}
         <ArrowRightIcon className="h-6 w-6" />
       </Link>
