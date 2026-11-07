@@ -2,7 +2,6 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
-
 // MaaSetu — installable PWA for low-end Android phones (360px reference width).
 export default defineConfig({
   plugins: [
@@ -49,4 +48,7 @@ export default defineConfig({
     host: true,
     port: 5173,
   },
+  // Make VITE_* env vars available to the client code
+  envPrefix: ['VITE_'],
+  envDir: './',
 })

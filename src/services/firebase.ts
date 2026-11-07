@@ -66,13 +66,20 @@ export const db = createFirestore();
  * offline behaviour can be exercised against real data. Set the key (and the
  * other VITE_ variables) to point at a hosted project instead.
  */
-export const usingEmulators: boolean = !import.meta.env.VITE_FIREBASE_API_KEY;
+export const usingEmulators: boolean = import.meta.env.VITE_USE_EMULATORS === 'true';
+
+export const demoMode: boolean = import.meta.env.VITE_DEMO_MODE === 'true';
 
 if (usingEmulators) {
   connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
   connectFirestoreEmulator(db, '127.0.0.1', 8080);
   // The Auth emulator accepts any 6-digit code, so no reCAPTCHA is needed.
   auth.settings.appVerificationDisabledForTesting = true;
+}
+
+// When emulators are on, also enable demo mode for the auth code flow
+if (usingEmulators) {
+  // VITE_DEMO_MODE will be checked in the auth service layer
 }
 
 void setPersistence(auth, browserSessionPersistence).catch((error: unknown) => {

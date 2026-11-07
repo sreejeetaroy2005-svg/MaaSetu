@@ -1,16 +1,26 @@
 import { useTranslation } from 'react-i18next';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { EntryShell } from '../components/EntryShell';
 import { ArrowRightIcon, HeartIcon } from '../components/icons';
 import { buttonClass } from '../components/ui';
+import { demoMode } from '../services/firebase';
 
-/**
- * First screen on every start: name, tagline, language and one way forward.
- * The block is centred in the available height, with the action and its note
- * kept together just below it.
- */
 export default function WelcomeScreen() {
   const { t } = useTranslation();
+  const isDemo = demoMode;
+  const [demoLoaded, setDemoLoaded] = useState(false);
+
+  // Load demo data once when component mounts in demo mode
+  useEffect(() => {
+    if (isDemo && !demoLoaded) {
+      import('../services/journeyService').then((module) => {
+        module.loadDemoData().then(() => {
+          setDemoLoaded(true);
+        });
+      });
+    }
+  }, [isDemo, demoLoaded]);
 
   return (
     <EntryShell center>
@@ -34,6 +44,22 @@ export default function WelcomeScreen() {
         {t('welcome.start')}
         <ArrowRightIcon className="h-6 w-6" />
       </Link>
+
+      {isDemo && !demoLoaded && (
+        <button
+          onClick={() => {
+            if (!confirm(t('demo.loadConfirm'))) return;
+            import('../services/journeyService').then((module) => {
+              module.loadDemoData().then(() => {
+                setDemoLoaded(true);
+              });
+            });
+          }}
+          className={buttonClass('secondary', 'mt-4 w-full min-h-14 text-lg')}
+        >
+          {t('demo.load')}
+        </button>
+      )}
 
       <p className="mt-3 text-center text-sm font-semibold text-slate-600">
         {t('welcome.demoNote')}

@@ -70,6 +70,11 @@ export interface Mother extends AuditedDoc {
   /** User id of the worker who registered her. */
   registeredBy: string;
   /**
+   * Current handover id (null when no active handover).
+   * Set and cleared in the same batch as handover create/accept/withdraw.
+   */
+  currentHandoverId: string | null;
+  /**
    * E.164 phone number recorded by her ASHA. Used only to match her at
    * sign-in (phone-OTP) — synthetic numbers only (99999900xx).
    */

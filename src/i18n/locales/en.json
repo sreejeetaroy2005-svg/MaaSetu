@@ -108,7 +108,9 @@
     "simulateTime": "Simulate 48 hours later",
     "simulateTimeHint": "Ages every waiting request past the overdue limit and sends the overdue messages.",
     "simulateTimeDone": "Aged {{aged}} requests · {{created}} new overdue messages",
-    "simulateTimeError": "Could not simulate time. Check that the emulators are running."
+    "simulateTimeError": "Could not simulate time. Check that the emulators are running.",
+    "load": "Load demo data",
+    "loadConfirm": "Load seed data into Firestore? This will overwrite existing data."
   },
   "worker": {
     "title": "My mothers",

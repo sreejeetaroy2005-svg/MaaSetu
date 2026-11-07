@@ -1,14 +1,13 @@
 /**
  * MaaSetu — seed script.
- *
  * Writes the SYNTHETIC dataset in `src/data/seedData.ts` to the LOCAL
- * Firestore emulator (Auth + Firestore). It refuses to run against anything
- * that is not a loopback emulator, so synthetic records can never reach a
- * real project, and it refuses to write any record not marked synthetic.
+ * Firestore emulator (Firestore only). Auth users should be created
+ * separately or via the Auth emulator REST API.
  *
  *   Terminal 1: npm run emulators
  *   Terminal 2: npm run seed            (or: npm run seed -- --dry-run)
  */
+
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 
@@ -43,7 +42,7 @@ const BATCHES: Array<[string, SeedRecord[]]> = [
 ];
 
 function assertLoopbackEmulator(host: string): void {
-  if (/^(127\.0\.0\.1|localhost|\[?::1\]?)(:\d+)?$/.test(host)) return;
+  if (/^(127\\.0\\.0\\.1|localhost|\\[?::1\\]?)(:\\d+)?$/.test(host)) return;
   console.error(
     `SAFETY: refusing to seed ${host} — synthetic data may only be written to a local emulator.`,
   );
@@ -84,7 +83,7 @@ async function main(): Promise<void> {
   initializeApp({ projectId: PROJECT_ID });
   const db = getFirestore();
 
-  // Admin SDK adapter for the shared audit-trail writer in src/services/audit.ts.
+  // Audit-store adapter
   const store: AuditStore = {
     async write(collection, id, data, merge = false) {
       await db.collection(collection).doc(id).set(data, merge ? { merge: true } : {});

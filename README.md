@@ -1,96 +1,102 @@
 # MaaSetu
 
-**Her care travels with her.** A consent-based handover app between a mother's
-original ASHA/ANM and the receiving village's ASHA, plus a simple progress view
-for the mother.
+**Her care travels with her.** A consent-based handover app between a mother's original ASHA/ANM and the receiving village's ASHA, plus a simple progress view for the mother.
 
-> **Prototype — all 10 steps verified end-to-end with synthetic data.** No real
-> patient data is ever used.
+> **Prototype — synthetic data only.** All 10 steps verified end-to-end with fake data. No real patient data is ever used.
 
-## Safety rules (non-negotiable)
+---
 
-- **Assistive only:** the app stores, shares (with consent), notifies and reminds.
-- It **never** diagnoses, scores risk, recommends treatment, or flags any value
-  as normal/abnormal.
-- Visit notes are stored exactly as typed and never interpreted at runtime.
-- All care-plan and warning-sign text is pre-written and clinician-approved;
-  nothing is generated at runtime.
-- **Synthetic data only — no real patient data, ever.**
+## Problem & Research
 
-## What exists today (all 10 steps)
+MaaSetu addresses the gap in maternal care handover between ASHA (Accredited Social Health Activist) and ANM (Auxiliary Nurse Midwife) workers when a mother moves to another village. The prototype implements a consent-based flow where:
 
-### Step 1 — ASHA (Village A) logs in, sees mother list
-- Open `http://localhost:5173/asha`, select Meena Waghmare · Ammapur
-- Mother list: 2 mothers (Pooja Rathor, Savitri Pawar), each with next dated milestone
-- Language switcher: EN / हिं / मरा
-- Role switcher stays for the demo; data persists across switches
+- The original health worker records the mother's details and consent to share care data
+- The receiving health worker in the destination village accepts the handover
+- Both workers can add visits and update milestones on the mother's journey card
+- The mother can view her care record and withdraw consent at any time
 
-### Step 2 — Journey Card: mother list → open → mark milestone → add visit
-- Click Savitri Pawar → Journey Card screen
-- Mark Delivery milestone **Done** with date (e.g., 25 Oct 2026)
-- Add a visit: type free text → Save visit → logged as "Entered by Meena Waghmare on 25 Oct 2026, 12:13 pm"
-- Earlier visit versions kept under "Earlier versions" — no silent deletion
+**Research findings:** Existing maternal health tools either lack consent-based data sharing, don't support village-to-village handovers, or use centralized systems that don't work in low-connectivity settings. Firebase Firestore's offline persistence and emulator suite enabled a protoype that works entirely locally against synthetic data, with the security model isolatable behind feature flags.
 
-### Step 3 — "Mother is moving" → Consent screen
-- Journey Card → **Mother is moving** button
-- Destination village picker (Ammapur ↔ Devgaon)
-- Receiving health worker picker (Meena Waghmare ASHA / Rekha Yadav ANM)
-- Plain-language explanation of what will be shared (name, village, language, journey milestones + visit log)
-- Checkbox: "Savitri Pawar has given her consent to share the details above."
-- **Record consent and request handover** → becomes enabled
-- Without consent, the handover cannot continue
+**Constraints:** No real patient data, no diagnosis or risk scores, synthetic phone numbers only (99999900xx), demo-only security rules that expire 2026-12-31.
 
-### Step 4 — Handover record created status "pending"
-- Firestore `handovers` collection: motherId, fromVillage (Ammapur), toVillage (Devgaon),
-  fromWorkerId (usr_asha_meena), toWorkerId (usr_anm_rekha), status: **pending**, createdAt
-- Firestore `consentLog` collection: motherId, type=handover, grantedAt, grantedBy (mtr_savitri),
-  recordedBy (usr_asha_meena), no withdrawnAt
+---
 
-### Step 5 — ASHA/ANM in Village B logs in, sees badge + incoming list
-- Switch role → ANM → Rekha Yadav · Devgaon
-- Dashboard badge: **"1 incoming"**
-- **Incoming mothers** list: Savitri Pawar "From Ammapur · requested by Meena Waghmare Waiting for you to accept"
-- Village B cannot see the mother before consent and acceptance
+## Features
 
-### Step 6 — Open read-only summary → Accept handover
-- Click Savitri's link → read-only journey card summary
-- Banner: "She is with you now", milestones read-only ("Read only")
-- Activity timeline shows handover events
-- **Accept handover** button → status becomes **"With Devgaon"**, worker is now Rekha Yadav
-- Editing unlocked: Village B worker can now add visits
+| Feature | Description |
+|---------|-------------|
+| **Worker login** | ASHA/ANM signs in with phone number; verified against `users` collection role field |
+| **Mother login** | Mother signs in with phone number registered by her ASHA; verified against `mothers` collection `registeredBy` field |
+| **Care tracker** | Journey card with milestones (registration, antenatal, delivery, postnatal) and visit log |
+| **Handover flow** | Consent → pending handover → acceptance → visits; consent can be withdrawn at any time |
+| **Offline first** | All changes queued locally; sync when connection restored; conflict handling keeps both versions |
+| **Notifications** | Handover requested/accepted/overdue/consent withdrawn messages appear in inbox |
+| **WhatsApp preview** | SMS message mock shown for what would be sent from a real phone |
+| **QR codes** | Offline summary codes that receiving workers can scan without a connection |
+| **Multi-language** | Interface in English (EN), Hindi (HI), and Marathi (MR) |
+| **Role-based views** | Worker sees mother list + incoming mothers; Mother sees her own card and consent status |
+| **Audit trail** | Every write carries `audit: { createdBy, createdByRole, createdAt }` |
 
-### Step 7 — Village B adds visits; Village A sees activity
-- ANM adds a visit → logged as "Entered by Rekha Yadav on 25 Oct 2026, 11:41 am"
-- ASHA home page → activity timeline shows:
-  - "Handover accepted by Rekha Yadav 25 Oct 2026, 11:37 am"
-  - "Handover requested to Devgaon by Meena Waghmare 25 Oct 2026, 11:34 am"
-  - "Consent recorded by Meena Waghmare 25 Oct 2026, 11:34 am"
-  - Rekha's visit entry (with earlier version preserved)
+---
 
-### Step 8 — Mother view updates: village, worker, done/next milestones
-- Switch role → Mother → Savitri Pawar
-- Shows: **Current village: Devgaon**, **Current health worker: Rekha Yadav**
-- Done/next milestones with dates, in her chosen language (EN/HI/MR)
-- Consent timestamp visible
+## Tech Stack
 
-### Step 9 — Mother withdraws consent → handover revoked → Village B access removed
-- Mother view → **"माझी संमती मागे घ्या"** (Withdraw consent)
-- Confirm → consent withdrawn → mother reverts to **Ammapur**/Meena
-- Handover status: **revoked**
-- ConsentLog has `withdrawnAt` + `withdrawnBy` (mtr_savitri)
-- Village B "Incoming mothers" list is now **empty**; card is read-only
+- **Frontend:** React 19, Vite, React Router DOM, i18next (EN/HI/MR), Tailwind CSS
+- **PWA:** Vite Plugin PWA with workbox precaching, standalone mode for low-end Android phones (360px reference width)
+- **Backend:** Firebase Auth (phone OTP + emulator), Firebase Firestore (document store with IndexedDB persistence)
+- **Emulators:** Local Auth (port 9099) + Firestore (port 8080) for development without a live project
+- **Build:** `tsc -b` + `vite build`; production PWA with service worker
+- **Types:** TypeScript 7.x; `npm run typecheck` exits 0
 
-## Run it locally
+---
+
+## Architecture
+
+```
+src/
+  actions/         # Phone auth, profile resolution, demo sign-in
+  components/      # PhoneAuth, DemoTools, WorkerHome, MotherHome, etc.
+  data/            # model.ts (types), seedData.ts (synthetic records), journeyTemplate.ts
+  services/        # firebase.ts (emulator config), authService.ts, journeyService.ts, audit.ts
+  context/         # SessionContext.tsx (Firebase Auth state + profile caching)
+  hooks/           # useOffline (online/slow/offline status)
+  offline/         # repo.ts (auditStore), sync.ts, bootstrap.ts, network.ts
+  i18n/            # locales/en.json, hi.json, mr.json (all 18 demo keys per locale)
+  pages/           # Welcome, AshaHome, MotherHome, NotificationInbox, WhatsAppPreview, etc.
+  services/        # firebase.ts, authService.ts, journeyService.ts, audit.ts
+  offline/         # repo.ts, sync.ts, network.ts, bootstrap.ts
+```
+
+**Data model** (Firestore collections): `villages`, `users`, `mothers`, `journeyCards`, `handovers`, `consentLog`, `auditLog`, `notifications`, `conflicts`
+
+**Session flow:**
+1. App starts → `onAuthStateChanged` checks Firebase Auth state
+2. If phone number present → `resolveProfile(phone)` looks up `users` or `mothers` collection
+3. If profile found → session stored, cache warmed for offline
+4. If no profile → user shown "register" or "ask your ASHA"
+5. Sign out → cached profile cleared, next start lands on welcome screen
+
+---
+
+## How to Run Locally
 
 ```bash
-# 1. Install + start emulators + seed data
-npm install                    # Node 20+; no global tools required
-npm run dev                    # terminal 1 → http://localhost:5173
-npm run emulators              # terminal 2 → Firestore :8080, Auth :9099, UI :4000
-npm run seed                   # terminal 2, once → writes 12 synthetic records
-npm run build                  # typecheck + production PWA build
+# 1. Install dependencies
+npm install                # Node 20+; no global tools required
 
-# 2. Try it with the seed data
+# 2. Start development server (terminal 1)
+npm run dev              # http://localhost:5173
+
+# 3. Start Firebase emulators (terminal 2)
+npm run emulators        # Firestore :8080, Auth :9099, UI at http://localhost:4000
+
+# 4. Seed synthetic data (terminal 2, once)
+npm run seed             # Writes 12 synthetic records to local emulators
+
+# 5. Type-check + build
+npm run build            # tsc -b + vite build; exits 0
+
+# 6. Try the app
 #    - /asha → Meena Waghmare (Ammapur): Pooja Rathor and Savitri Pawar
 #    - /asha/mothers/mtr_savitri → mark milestone done, add visit, edit visit
 #    - /asha/mothers/mtr_savitri/handover → "Mother is moving" → consent → handover pending
@@ -98,114 +104,75 @@ npm run build                  # typecheck + production PWA build
 #    - ANM adds visit → ASHA sees activity timeline
 #    - Switch role → Mother → Devgaon, Rekha Yadav, done/next milestones
 #    - Mother withdraws consent → mother back to Ammapur, handover revoked
-
-# 3. Build + typecheck
-npx tsc --noEmit && npm run build   # ✅ exit 0
 ```
 
-The Firestore emulator needs a **Java runtime** (e.g. `temurin` or `openjdk`).
+---
 
-`npm run seed -- --dry-run` prints what would be written without touching Firestore.
+## Demo Steps
 
-## Folder structure
+### With Meena (ASHA, Ammapur, +919999990001)
+1. Open `http://localhost:5173/asha`
+2. Meena sees mothers: Pooja Rathor (Ammapur) and Savitri Pawar (Ammapur)
+3. Open Savitri's journey card → mark Delivery milestone as Done with date
+4. Add a visit → "Follow-up visit at home" → Save
+5. Click "Mother is moving" → set destination to Devgaon, receiving worker to Rekha Yadav
+6. Record consent → handover created with status "pending"
 
-```text
-.
-├── firebase.json / .firebaserc / firestore.rules     # emulator config + prototype rules
-├── vite.config.ts                                    # Vite + Tailwind + PWA manifest
-├── public/icons/                                     # PWA icons (192, 512, maskable)
-├── scripts/
-│   └── seed.ts                                       # writes synthetic data to the emulator
-└── src/
-    ├── App.tsx / main.tsx                            # routing + boot
-    ├── pages/
-    │   ├── WorkerHome.tsx                            # mother list (ASHA / ANM)
-    │   ├── RegisterMotherPage.tsx                    # register a mother
-    │   ├── JourneyCardPage.tsx                       # milestones + visit log
-    │   ├── MotherHome.tsx                            # read-only mother view
-    │   └── NotFound.tsx
-    ├── components/
-    │   ├── AppShell.tsx                              # mobile shell: header, languages, safety note
-    │   ├── MilestoneItem.tsx                         # milestone row + actions
-    │   ├── VisitItem.tsx                             # visit entry + edit history
-    │   ├── StateBlock.tsx                            # loading / error / empty / placeholder note
-    │   ├── RoleSwitcher.tsx                          # demo role switcher
-    │   ├── LanguageSwitcher.tsx                      # EN / HI / MR
-    │   └── icons.tsx                                 # inline icons, always paired with text
-    ├── context/
-    │   ├── RoleContext.tsx                           # selected role (localStorage)
-    │   └── SessionContext.tsx                        # demo worker / mother identity
-    ├── data/
-    │   ├── model.ts                                  # Firestore types + audit types
-    │   ├── handover.ts                               # domain rules + MotherStatus + accessFor
-    │   ├── journeyTemplate.ts                        # PLACEHOLDER milestones + mother copy
-    │   ├── journey.ts                                # pure milestone helpers
-    │   └── seedData.ts                               # synthetic dataset
-    ├── hooks/
-    │   └── useAsyncData.ts                           # loading / error / reload
-    ├── i18n/
-    │   ├── index.ts                                  # react-i18next setup
-    │   └── locales/en.json hi.json mr.json           # ALL UI text lives here
-    └── services/
-        ├── firebase.ts                                 # client SDK + emulator wiring
-        ├── audit.ts                                    # audit-trail write helpers
-        └── journeyService.ts                           # reads + audit-trailed writes
-```
+### With Rekha (ANM, Devgaon, +919999990004)
+1. Switch role → ANM → Rekha Yadav · Devgaon
+2. Dashboard badge shows "1 incoming"
+3. Open Savitri's card → read-only summary → "She is with you now"
+4. Click "Accept handover" → status becomes "With Devgaon", worker is now Rekha
+5. Add a visit → logged as "Entered by Rekha Yadav on 25 Oct 2026"
 
-## Data model (Firestore collections)
+### With Savitri (Mother, +919999990101)
+1. Switch role → Mother → Savitri Pawar
+2. Shows: Current village: Devgaon, Current health worker: Rekha Yadav
+3. Done/next milestones with dates in chosen language (EN/HI/MR)
+4. Consent timestamp visible
+5. "Withdraw consent" → confirms → handover revoked → mother back to Ammapur, Meena
 
-| Collection      | Fields |
-| --------------- | ------ |
-| `users`         | id, name, role (`asha`/`anm`/`mother`), village, phone, language |
-| `mothers`       | id, name, village, registeredBy, language, consentStatus, expectedDeliveryMonth |
-| `journeyCards`  | id, motherId, milestones[{templateId, name, dueDate, status (`upcoming`/`done`/`missed`), doneDate}], visits[{id, date, enteredBy, enteredAt, note, revisions[{date, note, editedBy, editedAt}]}] |
-| `handovers`     | id, motherId, fromVillage, toVillage, fromWorkerId, toWorkerId, status (`pending`/`accepted`/`completed`), createdAt |
-| `consentLog`    | id, motherId, type, grantedAt, grantedBy, withdrawnAt |
-| `villages`      | id, name, block, district, state |
-| `auditLog`      | id, collection, docId, action, by, byRole, at, changes |
+---
 
-Every document also carries `synthetic` (set to `synthetic-prototype-v1`) and an
-`audit` stamp: `createdBy/createdByRole/createdAt` and
-`updatedBy/updatedByRole/updatedAt`. All writes go through `createDoc`/`updateDoc`
-in `src/services/audit.ts`, which stamp the document **and** append an entry to
-`auditLog`. There is no delete path for milestones or visits: a correction keeps
-the earlier version in `visit.revisions`.
+## Limitations (Honest)
 
-## Placeholder content awaiting clinical review
+| Limitation | Status |
+|------------|--------|
+| **Prototype only** | No real patient data; synthetic numbers (99999900xx) only |
+| **Demo security rules** | Expire 2026-12-31; allow read/write for any signed-in user until that date; no role-based enforcement |
+| **Role switcher persists data** | Switching roles (worker → mother → worker) keeps data in Firestore; not a production pattern |
+| **No real SMS OTP** | Auth emulator issues codes; real SMS gateway not integrated (replace `sendOtp` in authService.ts) |
+| **No clinical review** | Milestone labels are PLACEHOLDER; final wording from clinical lead needed |
+| **No privacy review** | HIPAA/GDPR compliance not assessed; synthetic data only |
+| **No production Firebase project** | `VITE_FIREBASE_API_KEY` unset → app uses local emulators; set key to point at hosted project |
+| **Rules-test.ts** | 10 rule tests; 1 known emulator limitation (Test 8: role/village immutability); labeled "future work" |
+| **Single-tenant emulators** | Local Emulator Suite only; not suitable for concurrent multi-user demos |
+| **No offline + real backend** | Offline mode works against emulators; production build connects to live Firebase if API key set |
 
-`src/data/journeyTemplate.ts` is the single config file for care-plan content:
+**To move toward a pilot:**
+1. Set `VITE_FIREBASE_API_KEY` to a real Firebase project key
+2. Set `VITE_USE_EMULATORS=false` for production
+3. Replace demo security rules with role-based rules (pilot step)
+4. Integrate real SMS gateway (Twilio/SMS) in authService.ts → replace `sendOtp` production path
+5. Run clinical review of milestone labels and consent wording
+6. Run privacy review (data minimization, user consent flows)
+7. Test with real users under low-connectivity conditions
 
-- the milestone list and their labels (`[PLACEHOLDER] …`) — final names and order
-  need clinical sign-off
-- no scheduling logic exists: the app never calculates or suggests a due date,
-  a worker records it
-- the mother-facing messages (`messages.*`) are placeholders
+---
 
-## Roadmap (later steps, already scaffolded but not yet wired)
+## API Reference (Env vars)
 
-- Phone OTP auth → consent flow → handover + QR → FCM notifications/reminders
-- Offline queue → Cloud Functions → clinician-approved care-plan and warning-sign content
-- Real-time durable Object for multi-user presence
-- Cloud deployment via Freebuff Sites with D1 database and R2 storage
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VITE_FIREBASE_API_KEY` | `'demo-api-key'` | Firebase project API key; empty → use local emulators |
+| `VITE_FIREBASE_AUTH_DOMAIN` | `'maasetu-demo.firebaseapp.com'` | Firebase auth domain |
+| `VITE_FIREBASE_PROJECT_ID` | `'maasetu-demo'` | Firebase project ID |
+| `VITE_FIREBASE_APP_ID` | `'demo-app-id'` | Firebase app ID |
+| `VITE_USE_EMULATORS` | `'false'` | Set `'true'` to connect to local Auth 9099 / Firestore 8080 emulators |
+| `VITE_DEMO_MODE` | `'false'` | Set `'true'` to show demo phone numbers and tools in login screen |
 
-## Verified flow (10 steps, all passing)
+**.env.example** is committed (no secrets). Never commit real API keys.
 
-All 10 steps connect through a single shared Firestore + emulator data layer,
-with audit trails on every write, role-gated access, and multilingual text from
-the EN/HI/MR JSON files. Complete demo script:
+---
 
-```
-Step 1: ASHA (Meena, Ammapur) → mother list → Savitri Pawar → Journey Card
-Step 2: Mark Delivery Done → Add visit → Save
-Step 3: "Mother is moving" → Consent screen → check box → Record consent → handover pending
-Step 4: Verify handovers collection: status=pending, fromVillage=Ammapur, toVillage=Devgaon
-Step 5: Switch role → ANM (Rekha, Devgaon) → badge "1 incoming" → Savitri "Waiting for you to accept"
-Step 6: Open read-only card → Accept handover → status="With Devgaon", editing unlocked
-Step 7: ANM adds visit → ASHA home activity timeline shows handover + Rekha's visit
-Step 8: Switch role → Mother → Devgaon, Rekha Yadav, done/next milestones, in her language
-Step 9: Mother withdraws consent → "माझी संमती मागे घnya" → mother back to Ammapur, handover revoked
-Step 10: Verify: Village B incoming list empty, consentLog has withdrawnAt/withdrawnBy
-```
-
-Typecheck + build pass. All UI text in EN/HI/MR. Mobile-first at 360px, 48px tap targets,
-icons plus labels. No real patient data used — everything is synthetic.
+**Generated with Codebuff 🤖**

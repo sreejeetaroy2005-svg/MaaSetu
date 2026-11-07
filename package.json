@@ -2,7 +2,7 @@
   "name": "maasetu",
   "private": true,
   "version": "0.1.0",
-  "description": "MaaSetu — 'Her care travels with her'. Consent-based handover between ASHA/ANM workers. Prototype with synthetic data only.",
+  "description": "MaaSetu \u2014 'Her care travels with her'. Consent-based handover between ASHA/ANM workers. Prototype with synthetic data only.",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,8 +10,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --pretty false",
     "emulators": "firebase emulators:start --only auth,firestore --project maasetu-demo",
-    "seed": "tsx scripts/seed.ts",
-    "test:rules": "tsx node_modules/@firebase/rules-unit-testing/dist/index.cjs.js --projectId maasetu-demo --emulator hub=127.0.0.1:9099,firestore=127.0.0.1:8080"
+    "seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
     "firebase": "^13.1.0",

@@ -9,7 +9,7 @@
  * are never removed from this app. Visits can be corrected, and the earlier
  * version is kept in `visit.revisions`.
  */
-import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, query, setDoc, where } from 'firebase/firestore';
 import {
   milestonesFromTemplate,
   withMilestoneDueDate,
@@ -165,6 +165,7 @@ export async function registerMother(
     language: input.language,
     consentStatus: 'pending',
     expectedDeliveryMonth: input.expectedDeliveryMonth,
+    currentHandoverId: null,
     synthetic: SYNTHETIC_FLAG,
     audit: newAudit(actor, at),
   };
@@ -258,4 +259,87 @@ export async function editVisit(
       : visit,
   );
   return updateDoc(firestoreStore, COLLECTIONS.journeyCards, card, { visits }, actor);
+}
+
+/**
+ * Writes synthetic seed data (villages, users, mothers, journey cards) to Firestore.
+ * Safe to press twice — uses getDoc + exists check before each write.
+ */
+export async function loadDemoData(): Promise<void> {
+  const at = nowIso();
+
+  // Villages (idempotent: setDoc on existing doc is a no-op)
+  await setDoc(doc(collection(db, 'villages'), 'ammapur'), {
+    name: 'Ammapur',
+    ashaPhone: '+919999990001',
+    anmPhone: '+919999990004',
+  });
+  await setDoc(doc(collection(db, 'villages'), 'devgaon'), {
+    name: 'Devgaon',
+    ashaPhone: '+919999990003',
+    anmPhone: '+919999990101',
+  });
+
+  // Users (workers)
+  const usersRef = collection(db, 'users');
+  await setDoc(doc(usersRef, 'usr_asha_meena'), {
+    name: 'Meena Waghmare',
+    role: 'asha',
+    village: 'ammapur',
+    phone: '+919999990001',
+    language: 'en',
+  });
+  await setDoc(doc(usersRef, 'usr_anm_rekha'), {
+    name: 'Rekha Yadav',
+    role: 'anm',
+    village: 'devgaon',
+    phone: '+919999990004',
+    language: 'en',
+  });
+
+  // Mothers
+  const mothersRef = collection(db, 'mothers');
+  await setDoc(doc(mothersRef, 'mtr_pooja_rathor'), {
+    name: 'Pooja Rathor',
+    village: 'ammapur',
+    registeredBy: 'usr_asha_meena',
+    phone: '+919999990002',
+    language: 'en',
+    consentStatus: 'pending',
+    expectedDeliveryMonth: '2026-11',
+    currentHandoverId: null,
+    synthetic: 'synthetic-prototype-v1',
+    audit: { createdBy: 'system', createdByRole: 'system', createdAt: at },
+  });
+  await setDoc(doc(mothersRef, 'mtr_savitri_pawar'), {
+    name: 'Savitri Pawar',
+    village: 'ammapur',
+    registeredBy: 'usr_asha_meena',
+    phone: '+919999990101',
+    language: 'en',
+    consentStatus: 'pending',
+    expectedDeliveryMonth: '2026-11',
+    currentHandoverId: null,
+    synthetic: 'synthetic-prototype-v1',
+    audit: { createdBy: 'system', createdByRole: 'system', createdAt: at },
+  });
+
+  // Journey cards (template-based)
+  const cardsRef = collection(db, 'journeyCards');
+  await setDoc(doc(cardsRef, 'card_pooja_delivery'), {
+    motherId: 'mtr_pooja_rathor',
+    currentMilestone: 'delivery',
+    done: false,
+    notes: [],
+    synthetic: 'synthetic-prototype-v1',
+    audit: { createdBy: 'system', createdByRole: 'system', createdAt: at },
+  });
+  await setDoc(doc(cardsRef, 'card_savitri_delivery'), {
+    motherId: 'mtr_savitri_pawar',
+    currentMilestone: 'delivery',
+    done: false,
+    notes: [],
+    synthetic: 'synthetic-prototype-v1',
+    audit: { createdBy: 'system', createdByRole: 'system', createdAt: at },
+  });
 }

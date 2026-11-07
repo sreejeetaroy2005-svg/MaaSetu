@@ -1,22 +1,63 @@
 rules_version = '2';
 
-//
-// MaaSetu — prototype rules (step 2: journey card).
-//
-// ⚠️ TEMPORARY, SYNTHETIC DATA ONLY ⚠️
-//
-// There is no sign-in yet: the app still uses the demo role switch, so the
-// client cannot be authenticated or authorised by role. These rules therefore
-// allow read/write so the journey-card screens can work against the Local
-// Emulator Suite.
-//
-// Replace this with role-aware rules when phone-OTP auth lands, and never
-// deploy it to a project that holds anything but synthetic data.
-//
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if true;
+    // ---- Limit: only until 2026-12-31 ----
+    // Demo rules, synthetic data only. Production role-based rules are a pilot step.
+    allow read, write: if request.auth != null
+      && request.time < timestamp.date(2026, 12, 31);
+
+    // ---- Users collection: read allowed for phone-number lookup before sign-in ----
+    match /users/{userId} {
+      // Pre-login: anyone can read users to find a matching phone number
+      allow read: if request.auth == null
+        || request.auth.uid == userId;
+      // Signed-in user can only write their own record; no role/village changes
+      allow write: if request.auth != null
+        && request.auth.uid == userId
+        && !('role' in request.resource.data)
+        && !('village' in request.resource.data);
+    }
+
+    // ---- Mothers collection ----
+    match /mothers/{motherId} {
+      allow read: if request.auth != null
+        && request.auth.uid == motherId;
+      allow write: if request.auth != null
+        && request.auth.uid == motherId;
+    }
+
+    // ---- JourneyCards collection ----
+    match /journeyCards/{cardId} {
+      allow read: if request.auth != null
+        && request.auth.uid == resource.data.motherId;
+      allow write: if request.auth != null;
+    }
+
+    // ---- Handovers collection ----
+    match /handovers/{handoverId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // ---- ConsentLog collection ----
+    match /consentLog/{consentId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+    }
+
+    // ---- Notifications collection ----
+    match /notifications/{notificationId} {
+      allow read: if request.auth != null
+        && get(resource).data().recipientUserId == request.auth.uid;
+      allow write: if request.auth != null
+        && get(resource).data().recipientUserId == request.auth.uid;
+    }
+
+    // ---- AuditLog collection ----
+    match /auditLog/{auditId} {
+      allow read: if request.auth != null;
+      allow write: if false;
     }
   }
 }
