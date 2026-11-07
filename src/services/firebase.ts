@@ -1,10 +1,14 @@
 /**
  * MaaSetu — Firebase client bootstrap.
  *
- * Development runs against the local Emulator Suite (Auth 9099, Firestore
- * 8080) so no live Firebase project is needed yet. Emulators are used in dev
- * builds only; a production build talks to whatever project the VITE_
- * variables point at (still empty at this step).
+ * Production (VITE_USE_EMULATORS != 'true'):
+ *   Talks to the real Firebase project configured by VITE_FIREBASE_* env vars.
+ *   Phone auth uses RecaptchaVerifier (invisible) + signInWithPhoneNumber.
+ *   Firestore queries always carry a real Firebase Auth user credential.
+ *
+ * Local development (VITE_USE_EMULATORS == 'true'):
+ *   Connects to the local Emulator Suite (Auth 9099, Firestore 8080).
+ *   reCAPTCHA verification is disabled for testing.
  *
  * Auth persistence is `browserSessionPersistence`: a reload keeps the session
  * in the same tab, and closing the tab signs out — the app must never reopen
@@ -59,15 +63,15 @@ function createFirestore() {
 export const db = createFirestore();
 
 /**
- * Emulator mode.
- *
- * Chosen by an empty `VITE_FIREBASE_API_KEY`: with no live project configured
- * the app talks to the local Emulator Suite, including in a preview build, so
- * offline behaviour can be exercised against real data. Set the key (and the
- * other VITE_ variables) to point at a hosted project instead.
+ * `true` only when VITE_USE_EMULATORS=true (local development).
+ * Never true in a production / hosted build.
  */
 export const usingEmulators: boolean = import.meta.env.VITE_USE_EMULATORS === 'true';
 
+/**
+ * `true` when demo UI mode is enabled (shows demo numbers, demo tools menu,
+ * and load demo data button). Fully independent of usingEmulators.
+ */
 export const demoMode: boolean = import.meta.env.VITE_DEMO_MODE === 'true';
 
 if (usingEmulators) {
@@ -75,11 +79,6 @@ if (usingEmulators) {
   connectFirestoreEmulator(db, '127.0.0.1', 8080);
   // The Auth emulator accepts any 6-digit code, so no reCAPTCHA is needed.
   auth.settings.appVerificationDisabledForTesting = true;
-}
-
-// When emulators are on, also enable demo mode for the auth code flow
-if (usingEmulators) {
-  // VITE_DEMO_MODE will be checked in the auth service layer
 }
 
 void setPersistence(auth, browserSessionPersistence).catch((error: unknown) => {

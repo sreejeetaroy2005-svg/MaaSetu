@@ -15,6 +15,7 @@ import { simulateHandoverAge } from '../services/handoverService';
 import type { Mother, User } from '../data/model';
 import { useNetwork } from '../hooks/useOffline';
 import { setSimulatedOffline } from '../offline/network';
+import { demoMode } from '../services/firebase';
 import { ClockIcon, CloseIcon, HeartIcon, HealthWorkerIcon, MenuIcon, WifiOffIcon } from './icons';
 
 interface DemoData {
@@ -23,6 +24,8 @@ interface DemoData {
 }
 
 export function DemoTools() {
+  if (!demoMode) return null;
+
   const { t } = useTranslation();
   const { role, worker, mother, refresh } = useSession();
   const villages = useVillages();

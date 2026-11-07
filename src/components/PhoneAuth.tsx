@@ -1,10 +1,13 @@
 /**
- * MaaSetu — phone + OTP form (the only place the prototype signs anyone in).
+ * MaaSetu — phone + OTP form (the only place the app signs anyone in).
  *
- * Kept in one component so a real SMS provider can replace it later without
- * touching a single screen. In development the Auth emulator issues the verification
- * code, so the on-screen demo code is only a hint when the emulator is offline; the
- * real code is the one the emulator logs for this phone number.
+ * Production (VITE_USE_EMULATORS != 'true'):
+ *   Uses RecaptchaVerifier (invisible) + signInWithPhoneNumber.
+ *   No demo fallback. All Firestore requests carry a real Firebase Auth user.
+ *
+ * Emulator (VITE_USE_EMULATORS == 'true'):
+ *   Shows a code hint from the emulator. If the emulator is unreachable,
+ *   falls back to the demo code (dev only).
  */
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -20,9 +23,11 @@ import {
   startDemoSession,
   type OtpChallenge,
 } from '../services/authService';
+import { demoMode, usingEmulators } from '../services/firebase';
 import { homePathFor, useSession } from '../context/SessionContext';
 import { Button, Card, Notice, inputClass, labelClass } from './ui';
 import { PhoneIcon } from './icons';
+import { WORKERS, MOTHERS } from '../data/seedData';
 
 type AccountKind = 'worker' | 'mother';
 
@@ -37,7 +42,29 @@ type ErrorKey =
   | 'verifyFailed'
   | 'workerNotFound'
   | 'motherNotFound'
+  | 'unauthorizedDomain'
+  | 'tooManyRequests'
   | null;
+
+/** Map Firebase auth error codes to our error keys */
+function classifyAuthError(error: unknown): ErrorKey {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = (error as { code: string }).code;
+    if (code === 'auth/invalid-verification-code' || code === 'auth/code-expired') {
+      return 'verifyFailed';
+    }
+    if (code === 'auth/invalid-phone-number' || code === 'auth/missing-phone-number') {
+      return 'invalidPhone';
+    }
+    if (code === 'auth/unauthorized-domain') {
+      return 'unauthorizedDomain';
+    }
+    if (code === 'auth/too-many-requests' || code === 'auth/quota-exceeded') {
+      return 'tooManyRequests';
+    }
+  }
+  return null;
+}
 
 export function PhoneAuth({ kind, initialPhone = '' }: PhoneAuthProps) {
   const { t } = useTranslation();
@@ -49,12 +76,14 @@ export function PhoneAuth({ kind, initialPhone = '' }: PhoneAuthProps) {
   const [code, setCode] = useState('');
   const [codeHint, setCodeHint] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<OtpChallenge | null>(null);
-  const [offline, setOffline] = useState(false);
+  const [emulatorOffline, setEmulatorOffline] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorKey>(null);
 
   const refreshCodeHint = (normalizedPhone: string) => {
-    void latestEmulatorCode(normalizedPhone).then((code) => setCodeHint(code));
+    // Only fetch code hints when running against the emulator
+    if (!usingEmulators) return;
+    void latestEmulatorCode(normalizedPhone).then((c) => setCodeHint(c));
   };
 
   const sendCode = async (event?: FormEvent) => {
@@ -66,29 +95,33 @@ export function PhoneAuth({ kind, initialPhone = '' }: PhoneAuthProps) {
     }
     setBusy(true);
     setError(null);
+
     try {
       const result = await sendOtp(phone);
-      if (!result) {
-        setError('sendFailed');
-        setBusy(false);
-        return;
-      }
       setConfirmation(result);
-      setOffline(false);
+      setEmulatorOffline(false);
       setCodeHint(null);
 
-      // Dev only: the emulator issued a real code for this number; show it.
-      // Normalization here matches the rest of the app so it works for 10-digit numbers too.
-      refreshCodeHint(normalizePhone(phone));
+      if (usingEmulators) {
+        // Emulator: show the code the emulator issued for this number
+        refreshCodeHint(normalizePhone(phone));
+      }
 
       setStep('code');
     } catch (caught) {
-      console.warn('MaaSetu: emulator OTP unavailable, using the demo code', caught);
-      // Dev fallback: the demo code still works if the Auth emulator is down.
-      setConfirmation(null);
-      setOffline(true);
-      setCodeHint(null);
-      setStep('code');
+      if (usingEmulators) {
+        // Dev fallback: the demo code still works if the Auth emulator is down.
+        console.warn('MaaSetu: emulator OTP unavailable, using the demo code', caught);
+        setConfirmation(null);
+        setEmulatorOffline(true);
+        setCodeHint(null);
+        setStep('code');
+      } else {
+        // Production: surface the real error
+        const classified = classifyAuthError(caught);
+        setError(classified ?? 'sendFailed');
+        console.error('MaaSetu: sendOtp failed', caught);
+      }
     } finally {
       setBusy(false);
     }
@@ -106,7 +139,9 @@ export function PhoneAuth({ kind, initialPhone = '' }: PhoneAuthProps) {
     try {
       if (confirmation) {
         await confirmOtp(confirmation, code);
-      } else if (!startDemoSession(phone, code)) {
+      } else if (usingEmulators && startDemoSession(phone, code)) {
+        // Emulator offline fallback accepted — session is set
+      } else {
         setError('verifyFailed');
         setBusy(false);
         return;
@@ -123,7 +158,8 @@ export function PhoneAuth({ kind, initialPhone = '' }: PhoneAuthProps) {
       void navigate(homePathFor(profile), { replace: true });
     } catch (caught) {
       console.error('MaaSetu: OTP verification failed', caught);
-      setError('verifyFailed');
+      const classified = classifyAuthError(caught);
+      setError(classified ?? 'verifyFailed');
     } finally {
       setBusy(false);
     }
@@ -135,46 +171,71 @@ export function PhoneAuth({ kind, initialPhone = '' }: PhoneAuthProps) {
       : error === 'sendFailed'
         ? t('auth.errorSend')
         : error === 'verifyFailed'
-          ? t('auth.errorCode')
+          ? t('auth.errorCode', { code: DEMO_OTP })
           : error === 'workerNotFound'
             ? t('auth.errorWorkerNotFound')
             : error === 'motherNotFound'
               ? t('auth.errorMotherNotFound')
-              : null;
+              : error === 'unauthorizedDomain'
+                ? t('auth.errorUnauthorizedDomain')
+                : error === 'tooManyRequests'
+                  ? t('auth.errorTooManyRequests')
+                  : null;
+
+  // Demo numbers shown when demoMode is true (hosted or local)
+  const demoWorkerPhones = demoMode ? WORKERS.map((w) => `${w.phone} (${w.name})`) : [];
+  const demoMotherPhones = demoMode ? MOTHERS.map((m) => `${m.phone} (${m.name})`) : [];
+  const demoNumbers = kind === 'mother' ? demoMotherPhones : demoWorkerPhones;
 
   if (step === 'phone') {
     return (
-      <form onSubmit={(event) => void sendCode(event)} className="space-y-3">
-        <Card>
-          <label htmlFor="auth-phone" className={labelClass}>
-            {t('auth.phoneLabel')}
-          </label>
-          <div className="relative">
-            <PhoneIcon className="pointer-events-none absolute top-4 left-3 h-5 w-5 text-slate-400" />
-            <input
-              id="auth-phone"
-              type="tel"
-              inputMode="tel"
-              autoComplete="tel"
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder={t('auth.phonePlaceholder')}
-              className={`${inputClass} pl-10`}
-            />
-          </div>
-          <p className="mt-2 text-sm leading-relaxed text-slate-600">
-            {kind === 'mother' ? t('auth.motherPhoneHint') : t('auth.workerPhoneHint')}
-          </p>
-        </Card>
+      <>
+        {/* Invisible reCAPTCHA container — required by Firebase phone auth in production */}
+        <div id="recaptcha-container" />
 
-        {errorMessage ? <Notice tone="error">{errorMessage}</Notice> : null}
+        <form onSubmit={(event) => void sendCode(event)} className="space-y-3">
+          <Card>
+            <label htmlFor="auth-phone" className={labelClass}>
+              {t('auth.phoneLabel')}
+            </label>
+            <div className="relative">
+              <PhoneIcon className="pointer-events-none absolute top-4 left-3 h-5 w-5 text-slate-400" />
+              <input
+                id="auth-phone"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                placeholder={t('auth.phonePlaceholder')}
+                className={`${inputClass} pl-10`}
+              />
+            </div>
+            <p className="mt-2 text-sm leading-relaxed text-slate-600">
+              {kind === 'mother' ? t('auth.motherPhoneHint') : t('auth.workerPhoneHint')}
+            </p>
+          </Card>
 
-        <Button type="submit" full disabled={busy}>
-          {busy ? t('auth.sending') : t('auth.sendCode')}
-        </Button>
+          {errorMessage ? <Notice tone="error">{errorMessage}</Notice> : null}
 
-        <Notice tone="info">{t('auth.demoNote', { code: DEMO_OTP })}</Notice>
-      </form>
+          <Button type="submit" full disabled={busy}>
+            {busy ? t('auth.sending') : t('auth.sendCode')}
+          </Button>
+
+          {demoMode ? (
+            <Notice tone="info">
+              {t('auth.demoNote', { code: DEMO_OTP })}
+              {demoNumbers.length > 0 ? (
+                <ul className="mt-1 list-disc pl-4 text-sm">
+                  {demoNumbers.map((n) => (
+                    <li key={n}>{n}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </Notice>
+          ) : null}
+        </form>
+      </>
     );
   }
 
@@ -224,13 +285,17 @@ export function PhoneAuth({ kind, initialPhone = '' }: PhoneAuthProps) {
         </div>
       </Card>
 
-      {offline ? <Notice tone="warn">{t('auth.offlineHint')}</Notice> : null}
+      {usingEmulators && emulatorOffline ? (
+        <Notice tone="warn">{t('auth.offlineHint', { code: DEMO_OTP })}</Notice>
+      ) : null}
       {errorMessage ? <Notice tone="error">{errorMessage}</Notice> : null}
-      {codeHint ? (
-        <Notice tone="info">{t('auth.codeHint', { code: codeHint })}</Notice>
-      ) : (
-        <Notice tone="info">{t('auth.demoNote', { code: DEMO_OTP })}</Notice>
-      )}
+      {demoMode ? (
+        codeHint ? (
+          <Notice tone="info">{t('auth.codeHint', { code: codeHint })}</Notice>
+        ) : (
+          <Notice tone="info">{t('auth.demoNote', { code: DEMO_OTP })}</Notice>
+        )
+      ) : null}
     </form>
   );
 }

@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { EntryShell } from '../components/EntryShell';
 import { ArrowRightIcon, HeartIcon } from '../components/icons';
@@ -9,18 +9,20 @@ import { demoMode } from '../services/firebase';
 export default function WelcomeScreen() {
   const { t } = useTranslation();
   const isDemo = demoMode;
-  const [demoLoaded, setDemoLoaded] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  // Load demo data once when component mounts in demo mode
-  useEffect(() => {
-    if (isDemo && !demoLoaded) {
-      import('../services/journeyService').then((module) => {
-        module.loadDemoData().then(() => {
-          setDemoLoaded(true);
-        });
-      });
+  const handleLoadDemo = async () => {
+    if (!confirm(t('demo.loadConfirm'))) return;
+    setLoading(true);
+    try {
+      const module = await import('../services/journeyService');
+      await module.loadDemoData();
+    } catch (error) {
+      console.error('MaaSetu: could not load demo data', error);
+    } finally {
+      setLoading(false);
     }
-  }, [isDemo, demoLoaded]);
+  };
 
   return (
     <EntryShell center>
@@ -45,19 +47,14 @@ export default function WelcomeScreen() {
         <ArrowRightIcon className="h-6 w-6" />
       </Link>
 
-      {isDemo && !demoLoaded && (
+      {isDemo && (
         <button
-          onClick={() => {
-            if (!confirm(t('demo.loadConfirm'))) return;
-            import('../services/journeyService').then((module) => {
-              module.loadDemoData().then(() => {
-                setDemoLoaded(true);
-              });
-            });
-          }}
+          type="button"
+          onClick={() => void handleLoadDemo()}
+          disabled={loading}
           className={buttonClass('secondary', 'mt-4 w-full min-h-14 text-lg')}
         >
-          {t('demo.load')}
+          {loading ? t('shared.saving') : t('demo.load')}
         </button>
       )}
 

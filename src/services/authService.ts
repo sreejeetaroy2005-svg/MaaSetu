@@ -1,29 +1,36 @@
 /**
  * MaaSetu — sign-in (phone + OTP).
  *
- * This is the ONLY module that talks to Firebase Auth, so the prototype's
- * sign-in can be replaced with a real SMS gateway later without touching the
- * screens. Registration/profile lookup stays in Firestore (`users` for
- * workers, `mothers` for mothers) so a mother signs in only if an ASHA has
- * already registered her phone number.
+ * This is the ONLY module that talks to Firebase Auth, so the app's
+ * sign-in can be replaced later without touching the screens.
  *
- * Development uses the Auth emulator. The emulator's own phone endpoints are
- * called directly for the "send code" step and the resulting session is
- * redeemed with `signInWithCredential`; that keeps the Firebase Auth session
- * real while skipping the SDK's reCAPTCHA Enterprise lookup, which the
- * emulator does not implement (it answers 501 and logs a console error).
- * The issued code is also readable from the emulator so the demo can show it.
+ * Production (VITE_USE_EMULATORS != 'true'):
+ *   Uses RecaptchaVerifier (invisible) + signInWithPhoneNumber, then
+ *   confirmationResult.confirm(code). No demo fallback is allowed.
  *
- * If the emulator is not running, the demo code falls back to a per-tab demo
- * session so the prototype can still be demonstrated offline; that fallback is
- * clearly limited to dev builds.
+ * Emulator (VITE_USE_EMULATORS == 'true'):
+ *   Calls the emulator's REST endpoint directly (no reCAPTCHA needed).
+ *   The issued code is also readable from the emulator for the demo hint.
+ *   Falls back to a per-tab demo session if the emulator is unreachable.
+ *
+ * Registration/profile lookup stays in Firestore (`users` for workers,
+ * `mothers` for mothers) so a mother signs in only if an ASHA has already
+ * registered her phone number.
  */
-import { PhoneAuthProvider, signInWithCredential, signOut as firebaseSignOut, type User as FirebaseUser } from 'firebase/auth';
+import {
+  PhoneAuthProvider,
+  RecaptchaVerifier,
+  ConfirmationResult,
+  signInWithPhoneNumber,
+  signInWithCredential,
+  signOut as firebaseSignOut,
+  type User as FirebaseUser,
+} from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore';
 import { auth, db, usingEmulators } from './firebase';
 import type { Mother, User } from '../data/model';
 
-export const DEMO_OTP = '123456';
+export const DEMO_OTP = import.meta.env.VITE_DEMO_OTP ?? '123456';
 
 const DEMO_SESSION_KEY = 'maasetu.demo-session';
 
@@ -34,9 +41,14 @@ export type Profile =
   | { kind: 'worker'; worker: User }
   | { kind: 'mother'; mother: Mother };
 
-/** A code has been sent; `verificationId` is the session it belongs to. */
+/**
+ * A code has been sent.
+ * - `verificationId`: used in the emulator path with PhoneAuthProvider.credential
+ * - `confirmationResult`: used in the production path with ConfirmationResult.confirm
+ */
 export interface OtpChallenge {
-  verificationId: string;
+  verificationId?: string;
+  confirmationResult?: ConfirmationResult;
 }
 
 interface EmulatorVerificationCode {
@@ -60,6 +72,26 @@ export function isValidPhone(input: string): boolean {
 
 function apiKey(): string {
   return auth.app.options.apiKey ?? 'demo-api-key';
+}
+
+// Module-level reCAPTCHA verifier (production only); recreated if cleared.
+let _recaptchaVerifier: RecaptchaVerifier | null = null;
+
+function getRecaptchaVerifier(): RecaptchaVerifier {
+  if (!_recaptchaVerifier) {
+    _recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+      size: 'invisible',
+      callback: () => {
+        // reCAPTCHA solved — signInWithPhoneNumber proceeds automatically
+      },
+      'expired-callback': () => {
+        // Token expired; clear so a new verifier is created on next attempt
+        _recaptchaVerifier?.clear();
+        _recaptchaVerifier = null;
+      },
+    });
+  }
+  return _recaptchaVerifier;
 }
 
 /**
@@ -98,6 +130,7 @@ async function listEmulatorCodes(): Promise<EmulatorVerificationCode[]> {
 
 /** Dev only: the most recent code the emulator issued for this number. */
 export async function latestEmulatorCode(phone: string): Promise<string | null> {
+  if (!usingEmulators) return null;
   try {
     const codes = await listEmulatorCodes();
     const normalized = normalizePhone(phone);
@@ -108,26 +141,42 @@ export async function latestEmulatorCode(phone: string): Promise<string | null> 
   }
 }
 
-/** Start phone sign-in: sends a code and returns the challenge to complete. */
+/**
+ * Start phone sign-in.
+ *
+ * Production: RecaptchaVerifier (invisible) → signInWithPhoneNumber → ConfirmationResult.
+ * Emulator:   Direct REST call, no reCAPTCHA.
+ */
 export async function sendOtp(phone: string): Promise<OtpChallenge> {
-  if (!usingEmulators) {
-    // Production swap point: signInWithPhoneNumber(auth, normalizePhone(phone), verifier)
-    throw new Error('MaaSetu: phone sign-in is wired to the Auth emulator only');
+  if (usingEmulators) {
+    return startEmulatorChallenge(phone);
   }
-  return startEmulatorChallenge(phone);
+  // Production: real Firebase phone auth
+  const verifier = getRecaptchaVerifier();
+  const result = await signInWithPhoneNumber(auth, normalizePhone(phone), verifier);
+  return { confirmationResult: result };
 }
 
 /** Complete phone sign-in with the SMS code; returns the Firebase Auth user. */
 export async function confirmOtp(challenge: OtpChallenge, code: string): Promise<FirebaseUser> {
-  const credential = PhoneAuthProvider.credential(challenge.verificationId, code.trim());
-  const result = await signInWithCredential(auth, credential);
-  return result.user;
+  if (challenge.confirmationResult) {
+    // Production path
+    const result = await challenge.confirmationResult.confirm(code.trim());
+    return result.user;
+  }
+  if (challenge.verificationId) {
+    // Emulator path
+    const credential = PhoneAuthProvider.credential(challenge.verificationId, code.trim());
+    const result = await signInWithCredential(auth, credential);
+    return result.user;
+  }
+  throw new Error('MaaSetu: OtpChallenge has neither confirmationResult nor verificationId');
 }
 
 /**
  * Dev-only fallback used when the Auth emulator is unreachable: accepts the
- * demo code and keeps a per-tab session. Never available in a production
- * build, and it grants nothing beyond the profile already in Firestore.
+ * demo code and keeps a per-tab session. Only available when usingEmulators.
+ * Never used in a production build.
  */
 export function startDemoSession(phone: string, code: string): boolean {
   if (!usingEmulators) return false;
@@ -148,9 +197,10 @@ export function clearDemoSession(): void {
 /**
  * Demo-tools shortcut: sign in straight to a seed account using the code the
  * emulator just issued, falling back to the per-tab demo session if the Auth
- * emulator is not running. Used only by the header's demo menu.
+ * emulator is not running. Used only by the header's demo menu (emulator mode).
  */
 export async function demoSignIn(phone: string): Promise<boolean> {
+  if (!usingEmulators) return false;
   try {
     const challenge = await sendOtp(phone);
     const code = await latestEmulatorCode(phone);
