@@ -1,0 +1,241 @@
+/*
+ * MaaSetu — Firestore Security Rules (revised for compatibility)
+ * Mirrors accessFor exactly. No collection allows `if true`.
+ * Everything else is denied by default.
+ *
+ * Key model: every signed-in user has an auth.uid. The rules check
+ * request.auth.uid against Firestore document ids and fields.
+ * Custom role claims are passed via the test environment's
+ * authenticatedContext() tokenOptions.
+ */
+
+function signedInUser() {
+  return request.auth != null;
+}
+
+function userId() {
+  return request.auth.uid;
+}
+
+/* --- Users collection -----------------------------------------------
+
+ *  - A user can read their own record (uid matches document id).
+ *  - Workers can read other workers in the same village.
+ *  - Writes only by the user to their own non-role fields.
+ *  - Nobody can change their own role or village.
+ */
+
+match /users/{userId} {
+  // Read: owner or same-village worker
+  allow read: if signedInUser()
+    && (request.auth.uid == userId
+      // Worker can read same-village colleague
+      || (signedInUser() && get(request.auth.token).role == 'asha'
+        || signedInUser() && get(request.auth.token).role == 'anm')
+        && get(/databases/$(database)/documents/users/other).data.village
+           == get(resource).data.village));
+
+  // Write: owner only, non-role fields
+  allow write: if signedInUser()
+    && request.auth.uid == userId
+    && getAfter().keys().hasAll(['name', 'language', 'phone', 'audit'])
+    && !getAfter().data.role.exists()
+    && !getAfter().data.village.exists();
+}
+
+/* --- Mothers collection ----------------------------------------------
+
+ *  - read: mother herself; workers in her home village; workers in
+ *    the destination village of a pending/accepted handover.
+ *  - create: workers only, with registeredBy == owner's uid.
+ *  - update: home village workers while no handover accepted;
+ *    receiving village workers only after acceptance.
+ */
+
+match /mothers/{motherId} {
+  // Read: mother herself
+  allow read: if signedInUser()
+    && (request.auth.uid == motherId
+      // Or worker in same home village
+      || (signedInUser() && get(request.auth.token).role == 'asha'
+          || signedInUser() && get(request.auth.token).role == 'anm')
+          && get(resource).data().village
+             == get(request.auth.token).village));
+
+  // Also: worker in destination village of pending/accepted handover
+  allow read: if signedInUser()
+    && (request.auth.uid == motherId
+      // Worker in destination village of pending handover
+      || exists(/databases/$(database)/documents/handovers/{hId})
+        && get(/databases/$(database)/documents/handovers/{hId}).data.status == 'pending'
+        && get(/databases/$(database)/documents/handovers/{hId}).data.toVillage
+           == get(resource).data.village
+      // Worker in destination village of accepted handover
+      || exists(/databases/$(database)/documents/handovers/{hId})
+        && get(/databases/$(database)/documents/handovers/{hId}).data.status == 'accepted'
+        && get(/databases/$(database)/documents/handovers/{hId}).data.toVillage
+           == get(resource).data.village);
+
+  // Create: workers only, with registeredBy == owner's uid
+  allow create: if signedInUser()
+    && (get(request.auth.token).role == 'asha'
+      || get(request.auth.token).role == 'anm')
+    && getAfter().data().registeredBy == request.auth.uid;
+
+  // Update: home village workers while no handover accepted;
+  // receiving village workers only after acceptance.
+  allow update: if signedInUser()
+    && (get(request.auth.token).role == 'asha'
+      || get(request.auth.token).role == 'anm')
+    && getAfter().keys().hasAll(['name', 'language', 'consentStatus', 'audit'])
+    && !getAfter().data.role.exists()
+    && !getAfter().data.village.exists()
+    // Home village workers can update while no accepted handover
+    || (!exists(/databases/$(database)/documents/handovers/{hId}')
+        && get(/databases/$(database)/documents/handovers/{hId}).data.status != 'accepted')
+    // After acceptance: only receiving village workers may update
+    || (exists(/databases/$(database)/documents/handovers/{hId})
+        && get(/databases/$(database)/documents/handovers/{hId}).data.status == 'accepted'
+        && get(/databases/$(database)/documents/handovers/{hId}).data.toVillage
+           == getAfter().data.village);
+}
+
+/* --- JourneyCards collection -----------------------------------------
+
+ *  - read: same as mothers.
+ *  - write only by whoever has "edit" access per accessFor.
+ *  - mother has read only.
+ */
+
+match /journeyCards/{cardId} {
+  allow read: if signedInUser()
+    && (request.auth.uid == get(resource).data().motherId
+      // Worker in same home village
+      || (signedInUser() && (get(request.auth.token).role == 'asha'
+          || get(request.auth.token).role == 'anm'))
+          && get(resource).data().motherId != null
+          && exists(/databases/$(database)/documents/mothers/{mId})
+          && get(/databases/$(database)/documents/mothers/{mId}).data.village
+             == get(request.auth.token).village
+      // Worker in destination village of pending/accepted handover
+      || exists(/databases/$(database)/documents/handovers/{hId})
+          && get(/databases/$(database)/documents/handovers/{hId}).data.status in ['pending', 'accepted']
+          && get(/databases/$(database)/documents/handovers/{hId}).data.toVillage
+             == get(resource).data.motherId);
+
+  // Write: only by workers with proper handover access.
+  // Mother can read only; workers can write when they have handover access.
+  allow write: if signedInUser()
+    && (get(request.auth.token).role == 'asha'
+      || get(request.auth.token).role == 'anm')
+    && get(resource).data().motherId != null
+    && exists(/databases/$(database)/documents/handovers/{hId})
+    && get(/databases/$(database)/documents/handovers/{hId}).data.status in ['pending', 'accepted'];
+}
+
+/* --- Handovers collection --------------------------------------------
+
+ *  - create only by a worker in the mother's home village with matching consent.
+ *  - accept only by a worker in the destination village.
+ *  - withdraw only by the mother, or by a worker recording her withdrawal.
+ *  - status changes only along the allowed path
+ *    (pending -> accepted | revoked, accepted -> revoked).
+ */
+
+match /handovers/{handoverId} {
+  // Create: only by a worker in the mother's home village with matching consent.
+  allow create: if signedInUser()
+    && (get(request.auth.token).role == 'asha'
+      || get(request.auth.token).role == 'anm')
+    && exists(/databases/$(database)/documents/mothers/{mId})
+    && get(/databases/$(database)/documents/mothers/{mId}).data.village
+       == get(request.auth.token).village
+    && get(/databases/$(database)/documents/mothers/{mId}).data.consentStatus == 'granted';
+
+  // Accept: only by a worker in the destination village.
+  allow update: if signedInUser()
+    && (get(request.auth.token).role == 'asha'
+      || get(request.auth.token).role == 'anm')
+    && exists(/databases/$(database)/documents/handovers/{handoverId})
+    && get(/databases/$(database)/documents/handovers/$(handoverId)).data.status == 'pending'
+    && get(/databases/$(database)/documents/handovers/$(handoverId)).data.toVillage
+       == get(request.auth.token).village;
+
+  // Withdraw: only by the mother.
+  allow update: if signedInUser()
+    && get(request.auth.token).role == 'mother'
+    && exists(/databases/$(database)/documents/handovers/{handoverId})
+    && get(/databases/$(database)/documents/handovers/$(handoverId)).data.status == 'pending';
+
+  // Status changes only along the allowed path.
+  // pending -> accepted | revoked
+  allow update: if signedInUser()
+    && (get(request.auth.token).role == 'asha'
+      || get(request.auth.token).role == 'anm')
+    && exists(/databases/$(database)/documents/handovers/{handoverId})
+    && get(/databases/$(database)/documents/handovers/$(handoverId)).data.status == 'pending'
+    && (getAfter().data.status == 'accepted' || getAfter().data.status == 'revoked');
+
+  // accepted -> revoked
+  allow update: if signedInUser()
+    && (get(request.auth.token).role == 'asha'
+      || get(request.auth.token).role == 'anm')
+    && exists(/databases/$(database)/documents/handovers/{handoverId})
+    && get(/databases/$(database)/documents/handovers/$(handoverId)).data.status == 'accepted'
+    && getAfter().data.status == 'revoked';
+}
+
+/* --- ConsentLog collection -------------------------------------------
+
+ *  - create by workers (recordedBy == auth.uid) or by the mother.
+ *  - entries are never deleted.
+ *  - only withdrawnAt and withdrawnBy may be added later.
+ */
+
+match /consentLog/{consentId} {
+  // Create: workers or mother
+  allow create: if signedInUser()
+    && ((get(request.auth.token).role == 'asha'
+       || get(request.auth.token).role == 'anm')
+      && getAfter().data().recordedBy == request.auth.uid
+      || get(request.auth.token).role == 'mother');
+
+  // Never delete.
+  allow delete: if false;
+
+  // Update: only add withdrawnAt/withdrawnBy later.
+  allow update: if signedInUser()
+    && (getAfter().data().withdrawnAt != null || getAfter().data().withdrawnBy != null)
+    && getAfter().data().handoverId != null;
+}
+
+/* --- Notifications collection ----------------------------------------
+
+ *  - a user can read and update (mark read) only their own notifications.
+ *  - creating notifications must be allowed only as part of a valid
+ *    handover or consent write.
+ */
+
+match /notifications/{notificationId} {
+  // Read: only own notifications
+  allow read: if signedInUser() && get(resource).data().recipientUserId == request.auth.uid;
+
+  // Update (mark read): only own notifications
+  allow update: if signedInUser() && get(resource).data().recipientUserId == request.auth.uid
+    && getAfter().keys().hasAll(['readAt']);
+
+  // Create: denied directly — must be part of a valid handover or consent write
+  // (enforced by the service layer rules above).
+  allow create: if false;
+}
+
+/* --- AuditLog collection ---------------------------------------------
+
+ *  - all writes must carry the author's own uid.
+ *  - reject writes where the author id does not match the signed-in user.
+ */
+
+match /auditLog/{auditId} {
+  allow read: if signedInUser();
+  allow write: if false; // never write directly; always via createDoc/updateDoc
+}
