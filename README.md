@@ -43,8 +43,10 @@ MaaSetu addresses the gap in maternal care handover between ASHA (Accredited Soc
 
 - **Frontend:** React 19, Vite, React Router DOM, i18next (EN/HI/MR), Tailwind CSS
 - **PWA:** Vite Plugin PWA with workbox precaching, standalone mode for low-end Android phones (360px reference width)
-- **Backend:** Firebase Auth (phone OTP + emulator), Firebase Firestore (document store with IndexedDB persistence)
-- **Emulators:** Local Auth (port 9099) + Firestore (port 8080) for development without a live project
+- **Backend:** Firestore (document store with IndexedDB persistence) — phone OTP removed; demo login uses seed profiles
+- **Emulators:** Firestore (port 8080) for development without a live project; Auth emulator kept only if VITE_USE_EMULATORS=true
+
+**Demo login:** Picks a seed profile automatically. It is not real authentication. Real phone OTP and role-based rules are the first pilot step.
 - **Build:** `tsc -b` + `vite build`; production PWA with service worker
 - **Types:** TypeScript 7.x; `npm run typecheck` exits 0
 

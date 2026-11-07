@@ -27,7 +27,7 @@ import {
   type User as FirebaseUser,
 } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore';
-import { auth, db, usingEmulators } from './firebase';
+import { auth, db, demoMode, usingEmulators } from './firebase';
 import type { Mother, User } from '../data/model';
 
 export const DEMO_OTP = import.meta.env.VITE_DEMO_OTP ?? '123456';
@@ -178,15 +178,15 @@ export async function confirmOtp(challenge: OtpChallenge, code: string): Promise
  * demo code and keeps a per-tab session. Only available when usingEmulators.
  * Never used in a production build.
  */
-export function startDemoSession(phone: string, code: string): boolean {
-  if (!usingEmulators) return false;
+export function startDemoSession(phone: string, code: string = DEMO_OTP): boolean {
+  if (!usingEmulators && !demoMode) return false;
   if (code.trim() !== DEMO_OTP) return false;
   sessionStorage.setItem(DEMO_SESSION_KEY, normalizePhone(phone));
   return true;
 }
 
 export function readDemoSession(): string | null {
-  if (!usingEmulators) return null;
+  if (!usingEmulators && !demoMode) return null;
   return sessionStorage.getItem(DEMO_SESSION_KEY);
 }
 
@@ -200,7 +200,7 @@ export function clearDemoSession(): void {
  * emulator is not running. Used only by the header's demo menu (emulator mode).
  */
 export async function demoSignIn(phone: string): Promise<boolean> {
-  if (!usingEmulators) return false;
+  if (!usingEmulators) return startDemoSession(phone, DEMO_OTP);
   try {
     const challenge = await sendOtp(phone);
     const code = await latestEmulatorCode(phone);

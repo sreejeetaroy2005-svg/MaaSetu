@@ -2,10 +2,12 @@ import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Navigate, useParams } from 'react-router-dom';
 import { EntryShell } from '../components/EntryShell';
+import { DemoLogin } from '../components/DemoLogin';
 import { PhoneAuth } from '../components/PhoneAuth';
 import { Button, Card, Notice, inputClass, labelClass } from '../components/ui';
 import { useVillages } from '../hooks/useVillages';
 import { isValidPhone, normalizePhone } from '../services/authService';
+import { demoMode } from '../services/firebase';
 import { phoneAlreadyUsed, registerWorker } from '../services/journeyService';
 import type { Language } from '../data/model';
 
@@ -209,7 +211,11 @@ export default function StartAuthPage() {
         />
       ) : (
         <>
-          <PhoneAuth key={`${kind}-${registeredPhone}`} kind={kind} initialPhone={registeredPhone} />
+          {demoMode ? (
+            <DemoLogin key={`${kind}-${registeredPhone}`} kind={kind} />
+          ) : (
+            <PhoneAuth key={`${kind}-${registeredPhone}`} kind={kind} initialPhone={registeredPhone} />
+          )}
           {kind === 'mother' ? (
             <p className="mt-4 rounded-xl bg-slate-100 p-4 text-sm leading-relaxed text-slate-700">
               {t('auth.motherRegisterNote')}

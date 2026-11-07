@@ -36,7 +36,10 @@
   "welcome": {
     "explanation": "One health worker hands a mother's care to another village. She decides what is shared, and she can stop sharing at any time.",
     "start": "Get started",
-    "demoNote": "Demo with synthetic data only."
+    "demoNote": "Demo with synthetic data only.",
+    "demoTitle": "Demo Login",
+    "sampleCode": "Sample code: 123456"
+
   },
   "start": {
     "title": "Who are you?",
